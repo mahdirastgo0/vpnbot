@@ -67,14 +67,19 @@ NO_PENDING_ORDERS = "در حال حاضر سفارش در انتظاری وجو�
 MY_CONFIGS_EMPTY = "هنوز هیچ کانفیگ فعالی نداری. از منوی «خرید سرویس» شروع کن 🛒"
 MY_CONFIGS_HEADER = "📂 کانفیگ‌های تو ({count} مورد):\n"
 MY_CONFIGS_ITEM = (
-    "{status_emoji} #{id} | {panel_name} | {type_label}\n"
-    "پلن: {plan_name}\n"
-    "حجم: {usage}\n"
-    "انقضا: {expire_status}\n"
+    "{status_emoji} #{id} | {config_name}\n"
+    "🌍 {panel_name} | {type_label}\n"
+    "📦 پلن: {plan_name}\n"
+    "📊 حجم: {usage}\n"
+    "⏳ انقضا: {expire_status}\n"
 )
 MY_CONFIGS_FOOTER = "\nبرای دریافت لینک یا QR هر کانفیگ، روی دکمه‌ی مربوطه بزن 👇"
 CONFIG_NOT_FOUND = "این کانفیگ پیدا نشد یا مال تو نیست."
-CONFIG_QR_CAPTION = "{panel_name} | {plan_name}\n\n`{link}`"
+CONFIG_QR_CAPTION = (
+    "📱 {config_name}\n"
+    "{panel_name} | {plan_name}\n\n"
+    "`{link}`"
+)
 
 SUPPORT_TEXT = "برای ارتباط با پشتیبانی به آیدی زیر پیام بده:\n{support}"
 
