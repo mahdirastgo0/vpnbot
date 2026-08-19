@@ -306,14 +306,7 @@ def build_config_link(
         {},
     )
 
-    address = (
-        inbound.get("address")
-        or inbound.get("server")
-        or inbound.get("host")
-        or settings_obj.get("address")
-        or settings_obj.get("server")
-        or getattr(panel, "server_address", "")
-    )
+    address = panel.server_address
 
     if not address:
         raise SanaeiApiError(

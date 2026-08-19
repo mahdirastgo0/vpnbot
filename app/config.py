@@ -75,7 +75,7 @@ class PanelConfig:
     url: str
     api_token: str
     inbound_id: int
-    api_base_path: str = "/panel/api"
+    server_address: str
     protocol: str = "vless"
 
 # ============================================================
@@ -117,28 +117,23 @@ def _load_panels() -> dict[str, PanelConfig]:
 
     panels: dict[str, PanelConfig] = {}
 
-    for key in keys:
-        prefix = f"PANEL_{key}_"
-
-        panels[key] = PanelConfig(
-            key=key,
-            name=_get(prefix + "NAME", key, required=True),
-            url=_get(prefix + "URL", required=True).rstrip("/"),
-            api_token=_get(prefix + "API_TOKEN", required=True),
-            inbound_id=int(
-                _get(prefix + "INBOUND_ID", required=True)
-            ),
-            api_base_path=_get(
-                prefix + "API_BASE_PATH",
-                "/panel/api",
-            ).rstrip("/"),
-            protocol=_get(
-                prefix + "PROTOCOL",
-                "vless",
-            ).strip().lower(),
-        )
-
-    return panels
+    panels[key] = PanelConfig(
+    key=key,
+    name=_get(prefix + "NAME", key, required=True),
+    url=_get(prefix + "URL", required=True).rstrip("/"),
+    api_token=_get(prefix + "API_TOKEN", required=True),
+    inbound_id=int(
+        _get(prefix + "INBOUND_ID", required=True)
+    ),
+    server_address=_get(
+        prefix + "SERVER_ADDRESS",
+        required=True,
+    ),
+    protocol=_get(
+        prefix + "PROTOCOL",
+        "vless",
+    ),
+)
 
 
 # ============================================================
