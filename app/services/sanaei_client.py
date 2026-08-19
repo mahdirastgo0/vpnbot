@@ -147,7 +147,11 @@ class SanaeiClient:
             hostname = self._extract_hostname()
             if hostname:
                 subscription_link = f"https://{hostname}:2096/sub/{quote(str(actual_sub_id))}"
-                logger.warning(f"لینک سابسکریپشن با fallback نهایی ساخته شد: {subscription_link}")
+                logger.warning(
+                    "لینک سابسکریپشن با fallback نهایی (بدون sub-path اختصاصی پنل) ساخته شد: "
+                    f"{subscription_link} — برای رفع این مشکل PANEL_{self.panel.key}_SUBSCRIPTION_URL "
+                    "را در .env تنظیم کنید."
+                )
             else:
                 raise SanaeiApiError(
                     f"امکان ساخت لینک Subscription وجود ندارد. subId: {actual_sub_id}, panel.url: {self.panel.url}"
@@ -185,14 +189,31 @@ class SanaeiClient:
         return links
 
     async def get_subscription_links(self, sub_id: str) -> list[str]:
+        """
+        نکته مهم: اندپوینت subLinks در این پنل، برخلاف انتظار،
+        یک لیست از رشته‌های لینک برنمی‌گردونه؛ یک dict با ساختار
+        {"client": {...}, "externalLinks": [...], "inboundIds": [...], "usedTraffic": ...}
+        برمی‌گردونه. اینجا هر دو حالت رو پشتیبانی می‌کنیم تا اگه پنل
+        یا نسخه‌ی دیگه‌ای فرمت متفاوتی داد، کد کرش نکنه.
+        """
         data = await self._request("GET", f"{self.api_base}/clients/subLinks/{quote(str(sub_id))}")
         if not isinstance(data, dict):
             return []
+
         obj = data.get("obj")
-        if not isinstance(obj, list):
-            return []
+
+        # حالت قدیمی/فرضی: obj خودش یک لیست از لینک‌هاست
+        candidates: list = []
+        if isinstance(obj, list):
+            candidates = obj
+        # حالت واقعی این پنل: obj یک dict هست و لینک‌ها (اگر باشن) زیر externalLinks میان
+        elif isinstance(obj, dict):
+            external = obj.get("externalLinks")
+            if isinstance(external, list):
+                candidates = external
+
         links = []
-        for item in obj:
+        for item in candidates:
             if isinstance(item, str) and item.strip().startswith(("vless://", "vmess://", "trojan://", "ss://", "hy2://", "hysteria://")):
                 links.append(item.strip())
         return links

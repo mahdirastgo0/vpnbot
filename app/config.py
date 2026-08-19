@@ -87,6 +87,15 @@ class PanelConfig:
     # مسیر API
     api_base_path: str = "/panel/api"
 
+    # ------------------------------------------------------
+    # آدرس پایه Subscription (شامل مسیر اختصاصی ساب‌سکریپشن پنل)
+    # مثال: https://panel.kenznum.ir:2096/sub/pbakp1v2aolxv0vg
+    # این رشته مسیر sub-path رندوم/اختصاصی پنل رو هم باید داشته باشه،
+    # چون پنل subLinks واقعی برنمی‌گردونه و باید دستی ساخته بشه.
+    # اگه خالی بمونه، کد به یک fallback ناقص (بدون sub-path) می‌افته.
+    # ------------------------------------------------------
+    subscription_url: str = ""
+
 
 # ==========================================================
 # PLAN
@@ -175,6 +184,15 @@ def _load_panels() -> dict[str, PanelConfig]:
             api_base_path=_get(
                 prefix + "API_BASE_PATH",
                 "/panel/api",
+            ).rstrip("/"),
+
+            # اختیاری است، اما برای اینکه لینک Subscription درست ساخته
+            # بشه (با مسیر sub-path اختصاصی پنل) شدیداً پیشنهاد می‌شود
+            # تنظیم بشه. مثال مقدار:
+            # PANEL_<KEY>_SUBSCRIPTION_URL=https://panel.kenznum.ir:2096/sub/pbakp1v2aolxv0vg
+            subscription_url=_get(
+                prefix + "SUBSCRIPTION_URL",
+                "",
             ).rstrip("/"),
         )
 
