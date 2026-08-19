@@ -161,8 +161,6 @@ class SanaeiClient:
             expire_ms = 0
 
         # ------------------------------------------------------
-        # مهم:
-        #
         # subId را خودمان می‌سازیم تا کلاینت Subscription داشته
         # باشد. ولی بعد از ساخت، subId واقعی را از خود پنل
         # با GET client دریافت می‌کنیم.
@@ -240,21 +238,30 @@ class SanaeiClient:
         )
 
         # ------------------------------------------------------
-        # Subscription
+        # دریافت لیست لینک‌های سابسکریپشن از پنل
         # ------------------------------------------------------
 
-        subscription_link = None
-
+        subscription_links = []
         try:
-            subscription_link = (
-                await self.get_subscription_link(
-                    actual_sub_id
-                )
-            )
+            subscription_links = await self.get_subscription_links(actual_sub_id)
         except SanaeiApiError:
-            # ممکن است subLinks خالی باشد؛
-            # کلاینت همچنان ساخته شده است.
-            subscription_link = None
+            # در صورت بروز خطا (مثلاً subLinks وجود ندارد)، لیست خالی در نظر گرفته می‌شود
+            subscription_links = []
+
+        # ------------------------------------------------------
+        # تعیین لینک اصلی سابسکریپشن
+        # اگر پنل لینکی ارائه داده باشد از آن استفاده می‌کنیم
+        # در غیر این صورت خودمان بر اساس ساختار پنل می‌سازیم
+        # ------------------------------------------------------
+
+        if subscription_links:
+            subscription_link = subscription_links[0]
+        else:
+            subscription_link = self.build_subscription_url(actual_sub_id)
+
+        # ------------------------------------------------------
+        # خروجی نهایی
+        # ------------------------------------------------------
 
         return {
             "client_uuid": str(actual_uuid),
@@ -263,6 +270,7 @@ class SanaeiClient:
             "inbound_id": int(inbound_id),
 
             "subscription_link": subscription_link,
+            "subscription_links": subscription_links,   # <-- اضافه شد
 
             "individual_links": individual_links,
 

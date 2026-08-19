@@ -72,14 +72,13 @@ async def provision_and_deliver(
         client_uuid = result["client_uuid"]
         sub_id = result["sub_id"]
 
-        subscription_link = client.build_subscription_url(sub_id)
+        # لینک اصلی سابسکریپشن (که یا از پنل گرفته شده یا خودمان ساختیم)
+        subscription_link = result["subscription_link"]
+
+        # لیست لینک‌های سابسکریپشن (که از پنل دریافت شده، ممکن است خالی باشد)
+        subscription_links = result.get("subscription_links", [])
 
         individual_links = result.get("individual_links", [])
-
-        subscription_links = result.get(
-            "subscription_links",
-            [],
-        )
 
         # ======================================================
         # EXPIRY
