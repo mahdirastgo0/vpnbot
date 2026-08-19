@@ -141,32 +141,44 @@ async def list_pending_orders(session: AsyncSession, method: PaymentMethod | Non
 async def upsert_plan(
     session: AsyncSession,
     panel_key: str,
-    name: str,
     plan_type: PlanType,
+    name: str,
     duration_days: int,
     traffic_gb: int,
     price: int,
     is_active: bool = True,
+    description: str | None = None,
 ) -> Plan:
-    """
-    اگر پلنی با همین (panel_key, name) از قبل وجود داشته باشد، بروزرسانی می‌شود؛
-    در غیر این‌صورت یک ردیف جدید ساخته می‌شود. برای seed_plans.py استفاده می‌شود
-    تا اجرای دوباره‌ی اسکریپت باعث ساخت پلن‌های تکراری نشود.
-    """
     result = await session.execute(
-        select(Plan).where(Plan.panel_key == panel_key, Plan.name == name)
+        select(Plan).where(
+            Plan.panel_key == panel_key,
+            Plan.name == name,
+        )
     )
-    plan = result.scalar_one_or_none()
-    if plan is None:
-        plan = Plan(panel_key=panel_key, name=name)
-        session.add(plan)
 
-    plan.plan_type = plan_type
-    plan.duration_days = duration_days
-    plan.traffic_gb = traffic_gb
-    plan.price = price
-    plan.is_active = is_active
+    plan = result.scalar_one_or_none()
+
+    if plan is None:
+        plan = Plan(
+            panel_key=panel_key,
+            plan_type=plan_type,
+            name=name,
+            description=description,
+            duration_days=duration_days,
+            traffic_gb=traffic_gb,
+            price=price,
+            is_active=is_active,
+        )
+        session.add(plan)
+    else:
+        plan.plan_type = plan_type
+        plan.description = description
+        plan.duration_days = duration_days
+        plan.traffic_gb = traffic_gb
+        plan.price = price
+        plan.is_active = is_active
 
     await session.commit()
     await session.refresh(plan)
+
     return plan
