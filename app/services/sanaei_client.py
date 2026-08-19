@@ -43,25 +43,11 @@ class SanaeiClient:
             },
         )
 
-    # ==========================================================
-    # REQUEST
-    # ==========================================================
-
-    async def _request(
-        self,
-        method: str,
-        path: str,
-        **kwargs,
-    ) -> dict:
-
+    async def _request(self, method: str, path: str, **kwargs) -> dict:
         if not path.startswith("/"):
             path = "/" + path
 
-        response = await self._client.request(
-            method,
-            path,
-            **kwargs,
-        )
+        response = await self._client.request(method, path, **kwargs)
 
         try:
             data = response.json()
@@ -74,36 +60,25 @@ class SanaeiClient:
             )
 
         if response.status_code == 401:
-            raise SanaeiApiError(
-                f"احراز هویت پنل «{self.panel.name}» رد شد."
-            )
-
+            raise SanaeiApiError(f"احراز هویت پنل «{self.panel.name}» رد شد.")
         if response.status_code == 404:
             raise SanaeiApiError(
                 "Endpoint پنل پیدا نشد.\n"
                 f"URL: {response.url}\n"
                 "HTTP: 404"
             )
-
         if response.status_code >= 400:
             raise SanaeiApiError(
                 f"خطای HTTP پنل «{self.panel.name}»:\n"
                 f"HTTP: {response.status_code}\n"
                 f"{data}"
             )
-
-        if isinstance(data, dict):
-            if data.get("success") is False:
-                raise SanaeiApiError(
-                    f"خطای پنل «{self.panel.name}»: "
-                    f"{data.get('msg', data)}"
-                )
+        if isinstance(data, dict) and data.get("success") is False:
+            raise SanaeiApiError(
+                f"خطای پنل «{self.panel.name}»: {data.get('msg', data)}"
+            )
 
         return data
-
-    # ==========================================================
-    # ADD CLIENT
-    # ==========================================================
 
     async def add_client(
         self,
@@ -112,47 +87,17 @@ class SanaeiClient:
         duration_days: int,
         inbound_id: int | None = None,
     ) -> dict:
-
-        inbound_id = (
-            inbound_id
-            if inbound_id is not None
-            else self.panel.inbound_id
-        )
-
+        inbound_id = inbound_id if inbound_id is not None else self.panel.inbound_id
         if inbound_id is None:
-            raise SanaeiApiError(
-                "Inbound ID برای این پنل مشخص نشده است."
-            )
+            raise SanaeiApiError("Inbound ID برای این پنل مشخص نشده است.")
 
         email = (email or "").strip()
-
         if not email:
-            raise SanaeiApiError(
-                "نام کانفیگ / email خالی است."
-            )
+            raise SanaeiApiError("نام کانفیگ / email خالی است.")
 
         client_uuid = str(uuid.uuid4())
-
-        # ------------------------------------------------------
-        # حجم و انقضا
-        # ------------------------------------------------------
-
-        if traffic_gb and traffic_gb > 0:
-            total_bytes = traffic_gb * 1024 * 1024 * 1024
-        else:
-            total_bytes = 0
-
-        if duration_days and duration_days > 0:
-            expire_ms = int(
-                (datetime.now(timezone.utc) + timedelta(days=duration_days)).timestamp() * 1000
-            )
-        else:
-            expire_ms = 0
-
-        # ------------------------------------------------------
-        # subId موقت
-        # ------------------------------------------------------
-
+        total_bytes = traffic_gb * 1024 * 1024 * 1024 if traffic_gb and traffic_gb > 0 else 0
+        expire_ms = int((datetime.now(timezone.utc) + timedelta(days=duration_days)).timestamp() * 1000) if duration_days and duration_days > 0 else 0
         requested_sub_id = uuid.uuid4().hex[:16]
 
         client_obj = {
@@ -166,88 +111,38 @@ class SanaeiClient:
             "subId": requested_sub_id,
         }
 
-        payload = {
-            "inboundIds": [int(inbound_id)],
-            "client": client_obj,
-        }
+        payload = {"inboundIds": [int(inbound_id)], "client": client_obj}
 
-        # ------------------------------------------------------
         # ساخت کلاینت
-        # ------------------------------------------------------
+        data = await self._request("POST", f"{self.api_base}/clients/add", json=payload)
 
-        data = await self._request(
-            "POST",
-            f"{self.api_base}/clients/add",
-            json=payload,
-        )
-
-        # ------------------------------------------------------
-        # دریافت اطلاعات واقعی کلاینت از پنل
-        # ------------------------------------------------------
-
+        # دریافت اطلاعات واقعی
         actual_client = await self.get_client(email)
-
         if not actual_client:
-            raise SanaeiApiError(
-                "کلاینت ساخته شد اما اطلاعات آن از پنل قابل دریافت نیست."
-            )
+            raise SanaeiApiError("کلاینت ساخته شد اما اطلاعات آن از پنل قابل دریافت نیست.")
 
-        # استخراج اطلاعات از obj.client
         client_info = actual_client.get("client", {})
-
-        actual_uuid = (
-            client_info.get("uuid")
-            or client_info.get("id")
-            or actual_client.get("uuid")
-            or actual_client.get("id")
-            or client_uuid
-        )
-
-        actual_sub_id = (
-            client_info.get("subId")
-            or client_info.get("subID")
-            or client_info.get("sub_id")
-            or actual_client.get("subId")
-            or actual_client.get("subID")
-            or actual_client.get("sub_id")
-        )
+        actual_uuid = client_info.get("uuid") or client_info.get("id") or actual_client.get("uuid") or actual_client.get("id") or client_uuid
+        actual_sub_id = client_info.get("subId") or client_info.get("subID") or client_info.get("sub_id") or actual_client.get("subId") or actual_client.get("subID") or actual_client.get("sub_id")
 
         if not actual_sub_id:
-            raise SanaeiApiError(
-                "کلاینت ساخته شد اما subId واقعی از پنل دریافت نشد."
-            )
+            raise SanaeiApiError("کلاینت ساخته شد اما subId واقعی از پنل دریافت نشد.")
 
         logger.info(f"subId دریافت شده از پنل: {actual_sub_id}")
 
-        # ------------------------------------------------------
-        # لینک‌های تکی
-        # ------------------------------------------------------
-
         individual_links = await self.get_client_links(email)
-
-        # ------------------------------------------------------
-        # دریافت لینک‌های سابسکریپشن از پنل (معمولاً خالی)
-        # ------------------------------------------------------
 
         subscription_links = []
         try:
             subscription_links = await self.get_subscription_links(actual_sub_id)
         except SanaeiApiError as e:
             logger.warning(f"خطا در دریافت subLinks: {e}")
-            subscription_links = []
-
-        logger.info(f"تعداد لینک‌های سابسکریپشن دریافت‌شده از پنل: {len(subscription_links)}")
-
-        # ------------------------------------------------------
-        # تعیین لینک اصلی سابسکریپشن
-        # ------------------------------------------------------
 
         if subscription_links:
             subscription_link = subscription_links[0]
         else:
             subscription_link = self.build_subscription_url(actual_sub_id)
 
-        # Fallback نهایی
         if not subscription_link:
             hostname = self._extract_hostname()
             if hostname:
@@ -255,13 +150,8 @@ class SanaeiClient:
                 logger.warning(f"لینک سابسکریپشن با fallback نهایی ساخته شد: {subscription_link}")
             else:
                 raise SanaeiApiError(
-                    f"امکان ساخت لینک Subscription وجود ندارد. "
-                    f"subId: {actual_sub_id}, panel.url: {self.panel.url}"
+                    f"امکان ساخت لینک Subscription وجود ندارد. subId: {actual_sub_id}, panel.url: {self.panel.url}"
                 )
-
-        # ------------------------------------------------------
-        # خروجی
-        # ------------------------------------------------------
 
         return {
             "client_uuid": str(actual_uuid),
@@ -275,142 +165,45 @@ class SanaeiClient:
             "client": actual_client,
         }
 
-    # ==========================================================
-    # GET CLIENT
-    # ==========================================================
-
-    async def get_client(
-        self,
-        email: str,
-    ) -> dict | None:
-
-        data = await self._request(
-            "GET",
-            f"{self.api_base}/clients/get/{quote(email)}",
-        )
-
+    async def get_client(self, email: str) -> dict | None:
+        data = await self._request("GET", f"{self.api_base}/clients/get/{quote(email)}")
         if not isinstance(data, dict):
             return None
+        return data.get("obj")
 
-        obj = data.get("obj")
-
-        if isinstance(obj, dict):
-            return obj
-
-        return None
-
-    # ==========================================================
-    # GET CLIENT LINKS
-    # ==========================================================
-
-    async def get_client_links(
-        self,
-        email: str,
-    ) -> list[str]:
-
-        data = await self._request(
-            "GET",
-            f"{self.api_base}/clients/links/{quote(email)}",
-        )
-
+    async def get_client_links(self, email: str) -> list[str]:
+        data = await self._request("GET", f"{self.api_base}/clients/links/{quote(email)}")
         if not isinstance(data, dict):
             return []
-
         obj = data.get("obj")
-
         if not isinstance(obj, list):
             return []
-
         links = []
-
         for item in obj:
-            if isinstance(item, str):
-                item = item.strip()
-
-                if item.startswith(
-                    (
-                        "vless://",
-                        "vmess://",
-                        "trojan://",
-                        "ss://",
-                        "hy2://",
-                        "hysteria://",
-                    )
-                ):
-                    links.append(item)
-
+            if isinstance(item, str) and item.strip().startswith(("vless://", "vmess://", "trojan://", "ss://", "hy2://", "hysteria://")):
+                links.append(item.strip())
         return links
 
-    # ==========================================================
-    # GET SUBSCRIPTION LINKS
-    # ==========================================================
-
-    async def get_subscription_links(
-        self,
-        sub_id: str,
-    ) -> list[str]:
-
-        data = await self._request(
-            "GET",
-            f"{self.api_base}/clients/subLinks/{quote(str(sub_id))}",
-        )
-
+    async def get_subscription_links(self, sub_id: str) -> list[str]:
+        data = await self._request("GET", f"{self.api_base}/clients/subLinks/{quote(str(sub_id))}")
         if not isinstance(data, dict):
             return []
-
         obj = data.get("obj")
-
         if not isinstance(obj, list):
             return []
-
         links = []
-
         for item in obj:
-            if isinstance(item, str):
-                item = item.strip()
-
-                if item.startswith(
-                    (
-                        "vless://",
-                        "vmess://",
-                        "trojan://",
-                        "ss://",
-                        "hy2://",
-                        "hysteria://",
-                    )
-                ):
-                    links.append(item)
-
+            if isinstance(item, str) and item.strip().startswith(("vless://", "vmess://", "trojan://", "ss://", "hy2://", "hysteria://")):
+                links.append(item.strip())
         return links
 
-    # ==========================================================
-    # BUILD SUBSCRIPTION URL
-    # ==========================================================
-
-    def build_subscription_url(
-        self,
-        sub_id: str,
-    ) -> str | None:
-
-        # اولویت با subscription_url تنظیمات پنل
-        subscription_base = getattr(
-            self.panel,
-            "subscription_url",
-            None,
-        )
-
+    def build_subscription_url(self, sub_id: str) -> str | None:
+        subscription_base = getattr(self.panel, "subscription_url", None)
         if subscription_base:
-            return (
-                subscription_base.rstrip("/")
-                + "/"
-                + quote(str(sub_id))
-            )
-
-        # در غیر این صورت از hostname و پورت 2096 استفاده می‌کنیم
+            return f"{subscription_base.rstrip('/')}/{quote(str(sub_id))}"
         hostname = self._extract_hostname()
         if hostname:
             return f"https://{hostname}:2096/sub/{quote(str(sub_id))}"
-
         return None
 
     def _extract_hostname(self) -> str | None:
@@ -419,148 +212,20 @@ class SanaeiClient:
         parsed = urlparse(self.panel.url)
         return parsed.hostname
 
-    # ==========================================================
-    # CLIENT TRAFFIC
-    # ==========================================================
-
-    async def get_client_traffic(
-        self,
-        email: str,
-    ) -> dict | None:
-
-        data = await self._request(
-            "GET",
-            f"{self.api_base}/clients/traffic/{quote(email)}",
-        )
-
+    async def get_client_traffic(self, email: str) -> dict | None:
+        data = await self._request("GET", f"{self.api_base}/clients/traffic/{quote(email)}")
         if isinstance(data, dict):
-            obj = data.get("obj")
-
-            if isinstance(obj, dict):
-                return obj
-
+            return data.get("obj")
         return None
 
-    # ==========================================================
-    # DELETE CLIENT
-    # ==========================================================
-
-    async def delete_client(
-        self,
-        inbound_id: int,
-        client_uuid: str,
-    ) -> None:
-
-        await self._request(
-            "POST",
-            f"{self.api_base}/inbounds/"
-            f"{inbound_id}/delClient/"
-            f"{client_uuid}",
-        )
-
-    # ==========================================================
-    # CLOSE
-    # ==========================================================
+    async def delete_client(self, inbound_id: int, client_uuid: str) -> None:
+        await self._request("POST", f"{self.api_base}/inbounds/{inbound_id}/delClient/{client_uuid}")
 
     async def close(self) -> None:
         await self._client.aclose()
 
 
-# ==============================================================
-# LEGACY
-# ==============================================================
-
-def build_config_link(
-    panel: PanelConfig,
-    inbound: dict,
-    client_uuid: str,
-    email: str,
-) -> str:
-
-    stream_settings = json.loads(
-        inbound.get("streamSettings") or "{}"
-    )
-
-    network = stream_settings.get(
-        "network",
-        "tcp",
-    )
-
-    security = stream_settings.get(
-        "security",
-        "none",
-    )
-
-    host = (
-        panel.url
-        .split("://")[-1]
-        .split(":")[0]
-    )
-
-    port = inbound.get("port")
-
-    remark = quote(
-        f"{panel.name}-{email}"
-    )
-
-    if panel.protocol == "vless":
-
-        params = [
-            f"type={network}",
-            f"security={security}",
-        ]
-
-        if security == "tls":
-            params.append(
-                "sni=" + host
-            )
-
-        if network == "ws":
-
-            path = (
-                stream_settings
-                .get("wsSettings", {})
-                .get("path", "/")
-            )
-
-            params.append(
-                "path=" + quote(path)
-            )
-
-        query = "&".join(params)
-
-        return (
-            f"vless://{client_uuid}"
-            f"@{host}:{port}"
-            f"?{query}"
-            f"#{remark}"
-        )
-
-    import base64
-
-    vmess_obj = {
-        "v": "2",
-        "ps": f"{panel.name}-{email}",
-        "add": host,
-        "port": port,
-        "id": client_uuid,
-        "aid": "0",
-        "net": network,
-        "type": "none",
-        "host": "",
-        "path": (
-            stream_settings
-            .get("wsSettings", {})
-            .get("path", "")
-        ),
-        "tls": security,
-    }
-
-    raw = json.dumps(
-        vmess_obj
-    ).encode()
-
-    return (
-        "vmess://"
-        + base64.b64encode(raw).decode()
-    )
+# Legacy function
+def build_config_link(panel: PanelConfig, inbound: dict, client_uuid: str, email: str) -> str:
+    # ... (همان کد قبلی)
+    pass

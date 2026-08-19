@@ -7,10 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database.models import Order, VpnConfig
-from app.services.sanaei_client import (
-    SanaeiApiError,
-    SanaeiClient,
-)
+from app.services.sanaei_client import SanaeiApiError, SanaeiClient
 
 
 async def provision_and_deliver(
@@ -24,7 +21,6 @@ async def provision_and_deliver(
 
     if plan is None:
         raise SanaeiApiError("پلن سفارش پیدا نشد.")
-
     if user is None:
         raise SanaeiApiError("کاربر سفارش پیدا نشد.")
 
@@ -32,10 +28,7 @@ async def provision_and_deliver(
     if panel is None:
         raise SanaeiApiError(f"پنل «{plan.panel_key}» پیدا نشد.")
 
-    email = (
-        (order.config_name or "").strip()
-        or f"user-{user.telegram_id}-{order.id}"
-    )
+    email = (order.config_name or "").strip() or f"user-{user.telegram_id}-{order.id}"
 
     client = SanaeiClient(panel)
 
@@ -56,7 +49,6 @@ async def provision_and_deliver(
         expire_at = datetime.now(timezone.utc) + timedelta(days=plan.duration_days)
 
         vpn_config = order.vpn_config
-
         if vpn_config is None:
             vpn_config = VpnConfig(
                 order_id=order.id,
@@ -105,11 +97,7 @@ async def provision_and_deliver(
             "Subscription و کانفیگ‌های تکی را دریافت کنید."
         )
 
-        await bot.send_message(
-            user.telegram_id,
-            text,
-            parse_mode="HTML",
-        )
+        await bot.send_message(user.telegram_id, text, parse_mode="HTML")
 
     finally:
         await client.close()
