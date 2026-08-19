@@ -12,7 +12,7 @@ from app.utils.callback_data import ConfigListCallback
 router = Router()
 
 
-# ---------- نمایش لیست کانفیگ‌ها (مشترک بین دستور و دکمه) ----------
+# ---------- نمایش لیست کانفیگ‌ها (مشترک) ----------
 async def show_configs_list(message: types.Message, user: User, session: AsyncSession):
     stmt = (
         select(VpnConfig)
@@ -46,8 +46,28 @@ async def my_configs_command(message: types.Message, user: User, session: AsyncS
 # ---------- هندلر دکمه «کانفیگ‌های من» از منوی اصلی ----------
 @router.callback_query(F.data == "my_configs")
 async def my_configs_callback(callback: CallbackQuery, user: User, session: AsyncSession):
-    await callback.answer()  # پاسخ به تلگراف
+    await callback.answer()
     await show_configs_list(callback.message, user, session)
+
+
+# ---------- هندلر دکمه «بازگشت به منو» ----------
+@router.callback_query(F.data == "back_to_menu")
+async def back_to_menu_callback(callback: CallbackQuery):
+    await callback.answer()
+    from app.keyboards.main_menu import main_menu_keyboard  # فرض بر این است که این تابع وجود دارد
+    await callback.message.edit_text(
+        "🏠 منوی اصلی",
+        reply_markup=main_menu_keyboard(),
+    )
+    # اگر ویرایش ممکن نیست، پیام جدید بفرستید
+    # await callback.message.delete()
+    # await callback.message.answer("🏠 منوی اصلی", reply_markup=main_menu_keyboard())
+
+
+# ---------- هندلر پیش‌فرض برای کال‌بک‌های ناشناخته (اختیاری) ----------
+@router.callback_query()
+async def unknown_callback(callback: CallbackQuery):
+    await callback.answer("این گزینه در دسترس نیست.", show_alert=True)
 
 
 # ---------- نمایش جزئیات یک کانفیگ خاص ----------
