@@ -5,7 +5,9 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(".env")
+load_dotenv("panels.env", override=False)
+load_dotenv("plans.env", override=False)
 
 
 def _get(
@@ -54,10 +56,6 @@ class PanelConfig:
 
 @dataclass
 class PlanConfig:
-    """
-    اطلاعات یک پلن که مستقیماً از .env خوانده می‌شود.
-    """
-
     key: str
     panel_key: str
     plan_type: str
@@ -65,8 +63,7 @@ class PlanConfig:
     duration_days: int
     traffic_gb: int
     price: int
-    is_active: bool = True
-    description: str = ""
+    is_active: bool
 
 
 def _load_panels() -> dict[str, PanelConfig]:

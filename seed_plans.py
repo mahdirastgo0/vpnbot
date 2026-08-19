@@ -1,3 +1,12 @@
+"""
+پلن‌ها از فایل plans.env خوانده می‌شوند.
+
+برای تغییر پلن‌ها فقط plans.env را تغییر بده
+و سپس:
+
+    python seed_plans.py
+"""
+
 import asyncio
 
 from app.config import settings
@@ -7,47 +16,43 @@ from app.database.models import PlanType
 
 
 async def main() -> None:
-
     await init_db()
+
+    if not settings.PLANS:
+        print("❌ هیچ پلنی در plans.env پیدا نشد.")
+        return
 
     async with async_session() as session:
 
-        for plan_key, data in settings.PLANS.items():
+        for data in settings.PLANS:
+
+            plan_type = (
+                PlanType.DIRECT
+                if data.plan_type == "direct"
+                else PlanType.TUNNEL
+            )
 
             plan = await upsert_plan(
                 session,
-
                 panel_key=data.panel_key,
-
-                plan_type=PlanType(data.plan_type),
-
+                plan_type=plan_type,
                 name=data.name,
-
-                description=data.description,
-
                 duration_days=data.duration_days,
-
                 traffic_gb=data.traffic_gb,
-
                 price=data.price,
-
                 is_active=data.is_active,
             )
-
-            status = "فعال" if plan.is_active else "غیرفعال"
 
             print(
                 f"✔ [{plan.panel_key}] "
                 f"{plan.plan_type.value:7s} | "
-                f"{plan.name} | "
-                f"{plan.traffic_gb}GB | "
-                f"{plan.price:,} تومان | "
-                f"{status}"
+                f"{plan.name} -> "
+                f"{plan.price:,} تومان"
             )
 
     print(
         f"\n✅ {len(settings.PLANS)} پلن "
-        f"از .env با موفقیت sync شد."
+        f"با موفقیت ثبت/بروزرسانی شد."
     )
 
 
