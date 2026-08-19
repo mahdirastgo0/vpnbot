@@ -151,11 +151,25 @@ async def show_config(
             bio.seek(0)
 
             await callback.message.delete()
-            await callback.message.answer_photo(
-                photo=BufferedInputFile(bio.read(), filename="config_qr.png"),
-                caption=caption,
-                reply_markup=back_to_menu_keyboard(),
-            )
+
+            # تلگرام caption عکس رو حداکثر ۱۰۲۴ کاراکتر قبول می‌کنه.
+            # اگه لینک ساب (مثلاً به‌خاطر داده‌ی قدیمی توی دیتابیس) بلند
+            # باشه و caption از این حد رد بشه، عکس رو بدون caption
+            # می‌فرستیم و متن رو جدا (پیام متنی محدودیتش خیلی بیشتره).
+            if len(caption) > 1024:
+                await callback.message.answer_photo(
+                    photo=BufferedInputFile(bio.read(), filename="config_qr.png"),
+                )
+                await callback.message.answer(
+                    caption,
+                    reply_markup=back_to_menu_keyboard(),
+                )
+            else:
+                await callback.message.answer_photo(
+                    photo=BufferedInputFile(bio.read(), filename="config_qr.png"),
+                    caption=caption,
+                    reply_markup=back_to_menu_keyboard(),
+                )
         except ImportError:
             await callback.message.edit_text(
                 caption,

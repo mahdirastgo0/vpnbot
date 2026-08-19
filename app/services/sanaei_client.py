@@ -132,16 +132,22 @@ class SanaeiClient:
 
         individual_links = await self.get_client_links(email)
 
-        subscription_links = []
+        # نکته: subLinks در این پنل لیستی از کانفیگ‌های تکی (externalLinks)
+        # برمی‌گردونه، نه یک لینک ساب کوتاه HTTPS. برای همین اینا رو فقط
+        # به individual_links اضافه می‌کنیم (بدون تکراری) و هرگز به‌عنوان
+        # subscription_link اصلی استفاده‌شون نمی‌کنیم.
+        extra_links = []
         try:
-            subscription_links = await self.get_subscription_links(actual_sub_id)
+            extra_links = await self.get_subscription_links(actual_sub_id)
         except SanaeiApiError as e:
             logger.warning(f"خطا در دریافت subLinks: {e}")
 
-        if subscription_links:
-            subscription_link = subscription_links[0]
-        else:
-            subscription_link = self.build_subscription_url(actual_sub_id)
+        for link in extra_links:
+            if link not in individual_links:
+                individual_links.append(link)
+
+        # لینک ساب همیشه از روی sub-path اختصاصی پنل ساخته می‌شه، نه از پاسخ subLinks
+        subscription_link = self.build_subscription_url(actual_sub_id)
 
         if not subscription_link:
             hostname = self._extract_hostname()
@@ -163,7 +169,7 @@ class SanaeiClient:
             "sub_id": str(actual_sub_id),
             "inbound_id": int(inbound_id),
             "subscription_link": subscription_link,
-            "subscription_links": subscription_links,
+            "subscription_links": extra_links,
             "individual_links": individual_links,
             "response": data,
             "client": actual_client,
