@@ -1,6 +1,6 @@
 from aiogram import Router, F, types
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InputFile
+from aiogram.types import BufferedInputFile, CallbackQuery
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -152,7 +152,7 @@ async def show_config(
 
             await callback.message.delete()
             await callback.message.answer_photo(
-                photo=InputFile(bio, filename="config_qr.png"),
+                photo=BufferedInputFile(bio.read(), filename="config_qr.png"),
                 caption=caption,
                 reply_markup=back_to_menu_keyboard(),
             )
