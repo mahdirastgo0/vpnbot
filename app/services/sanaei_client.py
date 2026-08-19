@@ -121,13 +121,56 @@ class SanaeiClient:
     # ADD CLIENT
     # ==========================================================
 
-    async def add_client(
-        self,
-        email: str,
-        traffic_gb: int,
-        duration_days: int,
-        inbound_id: int | None = None,
-    ) -> dict:
+async def add_client(
+    self,
+    email: str,
+    inbound_id: int | None = None,
+) -> dict:
+
+    inbound_id = (
+        inbound_id
+        if inbound_id is not None
+        else self.panel.inbound_id
+    )
+
+    client_uuid = str(uuid.uuid4())
+    sub_id = uuid.uuid4().hex[:16]
+
+    payload = {
+        "client": {
+            "email": email,
+            "id": client_uuid,
+            "enable": True,
+            "tgId": 0,
+            "subId": sub_id,
+        },
+        "inboundIds": [
+            int(inbound_id)
+        ],
+    }
+
+    print(
+        "\n========== CREATE CLIENT =========="
+    )
+    print("PANEL:", self.panel.name)
+    print("INBOUND:", inbound_id)
+    print("EMAIL:", email)
+    print("UUID:", client_uuid)
+    print("PAYLOAD:", json.dumps(payload, ensure_ascii=False))
+    print("===================================\n")
+
+    await self._request(
+        "POST",
+        "/panel/api/clients/add",
+        json=payload,
+    )
+
+    return {
+        "client_uuid": client_uuid,
+        "email": email,
+        "sub_id": sub_id,
+        "inbound_id": inbound_id,
+    }
 
         # ------------------------------------------------------
         # نام کانفیگ = دقیقاً نامی که کاربر وارد کرده

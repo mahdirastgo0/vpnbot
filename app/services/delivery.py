@@ -59,8 +59,6 @@ async def provision_and_deliver(
 
         result = await client.add_client(
             email=email,
-            traffic_gb=plan.traffic_gb,
-            duration_days=plan.duration_days,
             inbound_id=panel.inbound_id,
         )
 
