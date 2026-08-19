@@ -39,17 +39,23 @@ async def create_order(
     user: User,
     plan: Plan,
     payment_method: PaymentMethod,
+    config_name: str | None = None,
 ) -> Order:
+
     order = Order(
         user_id=user.id,
         plan_id=plan.id,
         amount=plan.price,
         payment_method=payment_method,
         status=OrderStatus.PENDING,
+        config_name=config_name,
     )
+
     session.add(order)
+
     await session.commit()
     await session.refresh(order)
+
     return order
 
 
@@ -95,23 +101,30 @@ async def save_vpn_config(
     duration_days: int,
     plan_type: PlanType = PlanType.DIRECT,
     plan_name: str = "",
+    config_name: str = "کانفیگ من",
 ) -> VpnConfig:
+
     cfg = VpnConfig(
         order_id=order.id,
         user_id=order.user_id,
         panel_key=panel_key,
         plan_type=plan_type,
         plan_name=plan_name,
+        config_name=config_name,
         inbound_id=inbound_id,
         client_email=client_email,
         client_uuid=client_uuid,
         config_link=config_link,
         traffic_gb=traffic_gb,
-        expire_at=datetime.now(timezone.utc) + timedelta(days=duration_days),
+        expire_at=datetime.now(timezone.utc)
+        + timedelta(days=duration_days),
     )
+
     session.add(cfg)
+
     await session.commit()
     await session.refresh(cfg)
+
     return cfg
 
 

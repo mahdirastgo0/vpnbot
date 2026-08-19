@@ -94,3 +94,21 @@ def my_configs_kb(configs: list) -> InlineKeyboardMarkup:
         for cfg in configs
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def config_name_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🎲 انتخاب اسم تصادفی",
+                    callback_data="config_name_random",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ لغو",
+                    callback_data="config_name_cancel",
+                )
+            ],
+        ]
+    )

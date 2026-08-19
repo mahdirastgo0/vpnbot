@@ -96,18 +96,19 @@ async def provision_and_deliver(
     # ذخیره در دیتابیس
     # --------------------------------------------------
     cfg = await save_vpn_config(
-        session,
-        order=order,
-        panel_key=plan.panel_key,
-        inbound_id=panel_cfg.inbound_id,
-        client_email=email,
-        client_uuid=client_uuid,
-        config_link=config_link,
-        traffic_gb=plan.traffic_gb,
-        duration_days=plan.duration_days,
-        plan_type=plan.plan_type,
-        plan_name=plan.name,
-    )
+            session,
+            order=order,
+            panel_key=plan.panel_key,
+            inbound_id=panel_cfg.inbound_id,
+            client_email=email,
+            client_uuid=result["client_uuid"],
+            config_link=config_link,
+            traffic_gb=plan.traffic_gb,
+            duration_days=plan.duration_days,
+            plan_type=plan.plan_type,
+            plan_name=plan.name,
+            config_name=order.config_name or "کانفیگ من",
+        )
 
     # جلوگیری از warning مربوط به متغیر استفاده‌نشده
     _ = cfg

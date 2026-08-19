@@ -36,22 +36,25 @@ async def pending_orders(
 
     for order in orders:
         text = (
-            f"سفارش #{order.id} — "
-            f"{order.payment_method.value}\n"
-            f"کاربر: {order.user.telegram_id}\n"
-            f"پلن: {order.plan.name} — "
-            f"{order.amount:,} {settings.CURRENCY_LABEL}\n"
+            f"🧾 سفارش #{order.id}\n"
+            f"💳 پرداخت: {order.payment_method.value}\n"
+            f"👤 کاربر: {order.user.telegram_id}\n"
+            f"📦 پلن: {order.plan.name}\n"
+            f"💰 مبلغ: {order.amount:,} {settings.CURRENCY_LABEL}\n"
+            f"📱 نام کانفیگ: {order.config_name or 'کانفیگ من'}\n"
         )
 
+        if order.crypto_coin:
+            text += f"🪙 ارز: {order.crypto_coin.upper()}\n"
+
         if order.crypto_tx_id:
-            text += f"TxID: `{order.crypto_tx_id}`\n"
+            text += f"🔗 TxID: `{order.crypto_tx_id}`\n"
 
         await message.answer(
             text,
             reply_markup=order_review_kb(order.id),
             parse_mode="Markdown",
         )
-
 
 @router.callback_query(F.data.startswith("admin_approve:"))
 async def approve_order(
@@ -210,3 +213,61 @@ async def reject_order(
     await callback.answer(
         "سفارش رد شد."
     )
+
+@router.callback_query(F.data.startswith("pay:zarinpal:"))
+async def pay_zarinpal(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+
+    plan_id = int(callback.data.split(":")[2])
+
+    data = await state.get_data()
+    config_name = data.get("config_name")
+
+    user, plan = await _get_user_and_plan(
+        session,
+        callback,
+        plan_id,
+    )
+
+    if plan is None:
+        await callback.answer(
+            "پلن یافت نشد.",
+            show_alert=True,
+        )
+        return
+
+    order = await create_order(
+        session,
+        user,
+        plan,
+        PaymentMethod.ZARINPAL,
+        config_name=config_name,
+    )
+
+    await state.clear()
+
+    try:
+        authority, pay_link = await zarinpal.request_payment(
+            amount_toman=plan.price,
+            description=f"خرید پلن {plan.name} - سفارش #{order.id}",
+            order_id=order.id,
+        )
+    except zarinpal.ZarinpalError as e:
+        await callback.message.answer(
+            f"⚠️ خطا در اتصال به زرین‌پال: {e}"
+        )
+        await callback.answer()
+        return
+
+    order.zarinpal_authority = authority
+    await session.commit()
+
+    await callback.message.answer(
+        texts.ZARINPAL_LINK,
+        reply_markup=zarinpal_pay_kb(pay_link),
+    )
+
+    await callback.answer()

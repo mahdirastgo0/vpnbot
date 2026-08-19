@@ -66,6 +66,7 @@ async def my_configs(message: Message, session: AsyncSession) -> None:
         text += texts.MY_CONFIGS_ITEM.format(
             status_emoji="🔴" if "منقضی" in expire_status else "🟢",
             id=cfg.id,
+            config_name=cfg.config_name or "کانفیگ من",
             panel_name=panel.name if panel else cfg.panel_key,
             type_label=PLAN_TYPE_LABELS.get(cfg.plan_type, ""),
             plan_name=cfg.plan_name or "-",
