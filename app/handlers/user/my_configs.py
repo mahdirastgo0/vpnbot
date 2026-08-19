@@ -1,104 +1,103 @@
-from datetime import datetime, timezone
-
-from aiogram import F, Router
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram import Router, F, types
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, InputFile
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-from app.database.crud import get_or_create_user, get_vpn_config, list_user_configs
-from app.keyboards.user_kb import PLAN_TYPE_LABELS, my_configs_kb
-from app.services.panel_manager import get_client
+from app.database.models import User, VpnConfig, Order
+from app.keyboards.inline import config_list_keyboard, back_to_menu_keyboard
 from app.utils import texts
-from app.utils.qrcode_gen import generate_qr_bytes
+from app.utils.callback_data import ConfigListCallback
 
-router = Router(name="my_configs")
-
-
-async def _usage_text(cfg) -> str:
-    """
-    تلاش می‌کند مصرف واقعی حجم را از پنل بگیرد؛ اگر پنل در دسترس نبود،
-    فقط سقف حجم خریداری‌شده را نشان می‌دهد تا صفحه‌ی کاربر خراب نشود.
-    """
-    total = "نامحدود" if cfg.traffic_gb == 0 else f"{cfg.traffic_gb} گیگ"
-    try:
-        client = get_client(cfg.panel_key)
-        traffic = await client.get_client_traffic(cfg.client_email)
-        if traffic:
-            used_bytes = int(traffic.get("up", 0)) + int(traffic.get("down", 0))
-            used_gb = used_bytes / (1024 ** 3)
-            return f"{used_gb:.1f} / {total} گیگ" if cfg.traffic_gb else f"{used_gb:.1f} گیگ مصرف‌شده (نامحدود)"
-    except Exception:
-        pass
-    return f"از {total}"
+router = Router()  # <-- این خط را حتماً اضافه کنید
 
 
-def _expire_status(expire_at: datetime) -> str:
-    now = datetime.now(timezone.utc)
-    if expire_at.tzinfo is None:
-        expire_at = expire_at.replace(tzinfo=timezone.utc)
-    remaining = expire_at - now
-    if remaining.total_seconds() <= 0:
-        return "🔴 منقضی شده"
-    days = remaining.days
-    return f"🟢 {days} روز مانده ({expire_at.strftime('%Y-%m-%d')})"
-
-
-@router.message(F.text == "📂 کانفیگ‌های من")
-async def my_configs(message: Message, session: AsyncSession) -> None:
-    user = await get_or_create_user(
-        session,
-        telegram_id=message.from_user.id,
-        username=message.from_user.username,
-        full_name=message.from_user.full_name,
+@router.message(Command("my_configs"))
+async def my_configs_command(message: types.Message, user: User, session: AsyncSession):
+    """نمایش لیست کانفیگ‌های فعال کاربر"""
+    # دریافت کانفیگ‌های فعال (غیرمنقضی)
+    stmt = (
+        select(VpnConfig)
+        .where(VpnConfig.user_id == user.id)
+        .where(VpnConfig.expire_at > func.now())
+        .order_by(VpnConfig.created_at.desc())
     )
-    configs = await list_user_configs(session, user.id)
+    configs = (await session.execute(stmt)).scalars().all()
+
     if not configs:
-        await message.answer(texts.MY_CONFIGS_EMPTY)
-        return
-
-    status_msg = await message.answer("⏳ در حال بررسی وضعیت کانفیگ‌ها...")
-
-    text = texts.MY_CONFIGS_HEADER.format(count=len(configs)) + "\n"
-    for cfg in configs:
-        panel = settings.PANELS.get(cfg.panel_key)
-        expire_status = _expire_status(cfg.expire_at)
-        usage = await _usage_text(cfg)
-        text += texts.MY_CONFIGS_ITEM.format(
-            status_emoji="🔴" if "منقضی" in expire_status else "🟢",
-            id=cfg.id,
-            config_name=cfg.config_name or "کانفیگ من",
-            panel_name=panel.name if panel else cfg.panel_key,
-            type_label=PLAN_TYPE_LABELS.get(cfg.plan_type, ""),
-            plan_name=cfg.plan_name or "-",
-            usage=usage,
-            expire_status=expire_status,
+        await message.answer(
+            "📭 شما هیچ کانفیگ فعالی ندارید.\n"
+            "برای خرید از بخش «🛒 خرید اشتراک» اقدام کنید.",
+            reply_markup=back_to_menu_keyboard(),
         )
-        text += "\n"
-    text += texts.MY_CONFIGS_FOOTER
-
-    await status_msg.edit_text(text, reply_markup=my_configs_kb(configs))
-
-
-@router.callback_query(F.data.startswith("show_config:"))
-async def show_config(callback: CallbackQuery, session: AsyncSession) -> None:
-    config_id = int(callback.data.split(":", 1)[1])
-    cfg = await get_vpn_config(session, config_id)
-    user = await get_or_create_user(
-        session, callback.from_user.id, callback.from_user.username, callback.from_user.full_name
-    )
-    if cfg is None or cfg.user_id != user.id:
-        await callback.answer(texts.CONFIG_NOT_FOUND, show_alert=True)
         return
 
-    panel = settings.PANELS.get(cfg.panel_key)
-    qr = generate_qr_bytes(cfg.config_link)
-    await callback.message.answer_photo(
-        photo=BufferedInputFile(qr.read(), filename="config.png"),
-        caption=texts.CONFIG_QR_CAPTION.format(
-            panel_name=panel.name if panel else cfg.panel_key,
-            plan_name=cfg.plan_name or "-",
-            link=cfg.config_link,
-        ),
-        parse_mode="Markdown",
+    # ارسال لیست با کیبورد
+    await message.answer(
+        "📂 کانفیگ‌های فعال شما:\n"
+        "یکی را انتخاب کنید تا اطلاعات کامل آن را ببینید.",
+        reply_markup=config_list_keyboard(configs),
     )
+
+
+@router.callback_query(ConfigListCallback.filter())
+async def show_config(
+    callback: CallbackQuery,
+    callback_data: ConfigListCallback,
+    session: AsyncSession,
+    user: User,
+):
+    """نمایش جزییات یک کانفیگ مشخص"""
+    vpn_config = await session.get(VpnConfig, callback_data.config_id)
+    if not vpn_config:
+        await callback.answer("کانفیگ یافت نشد.", show_alert=True)
+        return
+
+    # بررسی دسترسی کاربر
+    if vpn_config.user_id != user.id:
+        await callback.answer("شما به این کانفیگ دسترسی ندارید.", show_alert=True)
+        return
+
+    # ---------- ساخت متن ----------
+    traffic_text = "نامحدود" if vpn_config.traffic_gb <= 0 else f"{vpn_config.traffic_gb} GB"
+    expire_text = vpn_config.expire_at.strftime("%Y-%m-%d %H:%M") if vpn_config.expire_at else "نامحدود"
+
+    caption = texts.CONFIG_QR_CAPTION.format(
+        config_name=vpn_config.config_name,          # <-- کلید درست
+        plan_name=vpn_config.plan_name,
+        traffic_gb=traffic_text,
+        expire_at=expire_text,
+        subscription_link=vpn_config.subscription_link or "ندارد",
+        # در صورت نیاز سایر فیلدها
+    )
+
+    # ---------- ارسال QR یا لینک ----------
+    # اگر کانفیگ لینک سابسکریپشن دارد، آن را به صورت QR نمایش دهید
+    if vpn_config.subscription_link:
+        # ساخت QR (با استفاده از کتابخانه qrcode)
+        import qrcode
+        from io import BytesIO
+
+        qr = qrcode.QRCode(box_size=10, border=2)
+        qr.add_data(vpn_config.subscription_link)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        bio = BytesIO()
+        img.save(bio, "PNG")
+        bio.seek(0)
+
+        await callback.message.delete()
+        await callback.message.answer_photo(
+            photo=InputFile(bio, filename="config_qr.png"),
+            caption=caption,
+            reply_markup=back_to_menu_keyboard(),
+        )
+    else:
+        # اگر لینکی نبود، فقط متن ارسال شود
+        await callback.message.edit_text(
+            caption,
+            reply_markup=back_to_menu_keyboard(),
+        )
+
     await callback.answer()
