@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlparse
@@ -193,14 +192,22 @@ class SanaeiClient:
                 "کلاینت ساخته شد اما اطلاعات آن از پنل قابل دریافت نیست."
             )
 
+        # استخراج اطلاعات از obj.client
+        client_info = actual_client.get("client", {})
+
         actual_uuid = (
-            actual_client.get("id")
+            client_info.get("uuid")
+            or client_info.get("id")
             or actual_client.get("uuid")
+            or actual_client.get("id")
             or client_uuid
         )
 
         actual_sub_id = (
-            actual_client.get("subId")
+            client_info.get("subId")
+            or client_info.get("subID")
+            or client_info.get("sub_id")
+            or actual_client.get("subId")
             or actual_client.get("subID")
             or actual_client.get("sub_id")
         )
@@ -219,7 +226,7 @@ class SanaeiClient:
         individual_links = await self.get_client_links(email)
 
         # ------------------------------------------------------
-        # دریافت لینک‌های سابسکریپشن از پنل (که معمولاً خالی است)
+        # دریافت لینک‌های سابسکریپشن از پنل (معمولاً خالی)
         # ------------------------------------------------------
 
         subscription_links = []
@@ -238,15 +245,10 @@ class SanaeiClient:
         if subscription_links:
             subscription_link = subscription_links[0]
         else:
-            # خودمان لینک می‌سازیم
             subscription_link = self.build_subscription_url(actual_sub_id)
 
-        # ------------------------------------------------------
-        # چک نهایی و Fallback قوی
-        # ------------------------------------------------------
-
+        # Fallback نهایی
         if not subscription_link:
-            # اگر به هر دلیلی لینک ساخته نشد، یک لینک پیش‌فرض با hostname و پورت 2096 می‌سازیم
             hostname = self._extract_hostname()
             if hostname:
                 subscription_link = f"https://{hostname}:2096/sub/{quote(str(actual_sub_id))}"
@@ -256,11 +258,6 @@ class SanaeiClient:
                     f"امکان ساخت لینک Subscription وجود ندارد. "
                     f"subId: {actual_sub_id}, panel.url: {self.panel.url}"
                 )
-
-        if not subscription_link:
-            raise SanaeiApiError(
-                "لینک Subscription برای کلاینت از پنل دریافت نشد و امکان ساخت آن وجود ندارد."
-            )
 
         # ------------------------------------------------------
         # خروجی
@@ -387,20 +384,6 @@ class SanaeiClient:
         return links
 
     # ==========================================================
-    # GET SUBSCRIPTION LINK (قدیمی)
-    # ==========================================================
-
-    async def get_subscription_link(
-        self,
-        sub_id: str,
-    ) -> str | None:
-
-        links = await self.get_subscription_links(sub_id)
-        if not links:
-            return None
-        return links[0]
-
-    # ==========================================================
     # BUILD SUBSCRIPTION URL
     # ==========================================================
 
@@ -409,7 +392,7 @@ class SanaeiClient:
         sub_id: str,
     ) -> str | None:
 
-        # اولویت اول: subscription_url از تنظیمات پنل
+        # اولویت با subscription_url تنظیمات پنل
         subscription_base = getattr(
             self.panel,
             "subscription_url",
@@ -423,9 +406,7 @@ class SanaeiClient:
                 + quote(str(sub_id))
             )
 
-        # اگر تنظیم نشده بود، از panel.url استفاده می‌کنیم
-        # اما برای پنل شما، panel.url شامل پورت 39217 و مسیر aN1MrpoX46nkjnJyAr است
-        # بنابراین ما hostname را استخراج کرده و پورت 2096 و مسیر /sub/ را اضافه می‌کنیم
+        # در غیر این صورت از hostname و پورت 2096 استفاده می‌کنیم
         hostname = self._extract_hostname()
         if hostname:
             return f"https://{hostname}:2096/sub/{quote(str(sub_id))}"
@@ -433,13 +414,10 @@ class SanaeiClient:
         return None
 
     def _extract_hostname(self) -> str | None:
-        """hostname را از panel.url استخراج می‌کند (بدون پورت و مسیر)"""
         if not self.panel.url:
             return None
-
         parsed = urlparse(self.panel.url)
-        hostname = parsed.hostname
-        return hostname
+        return parsed.hostname
 
     # ==========================================================
     # CLIENT TRAFFIC
