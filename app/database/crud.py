@@ -436,6 +436,33 @@ async def get_config(
 
     return result.scalar_one_or_none()
 
+async def get_vpn_config(
+    session: AsyncSession,
+    config_id: int,
+):
+    return await get_config(
+        session,
+        config_id,
+    )
+
+
+async def list_user_configs(
+    session: AsyncSession,
+    user_id: int,
+):
+    from app.database.models import VpnConfig
+
+    result = await session.execute(
+        select(VpnConfig)
+        .where(
+            VpnConfig.user_id == user_id
+        )
+        .order_by(
+            VpnConfig.id.desc()
+        )
+    )
+
+    return list(result.scalars().all())
 
 async def get_config_for_user(
     session: AsyncSession,
