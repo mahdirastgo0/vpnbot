@@ -64,6 +64,7 @@ class PlanConfig:
     traffic_gb: int
     price: int
     is_active: bool
+    description: str = ""
 
 
 def _load_panels() -> dict[str, PanelConfig]:
