@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
@@ -19,14 +20,24 @@ class SanaeiClient:
 
         self.panel = panel
 
+        base_url = panel.url.rstrip("/")
+
+        api_base = getattr(
+            panel,
+            "api_base_path",
+            "/panel/api",
+        ).strip("/")
+
+        self.api_base = f"/{api_base}"
+
         self._client = httpx.AsyncClient(
-            base_url=panel.url,
+            base_url=base_url,
             verify=False,
-            timeout=20,
+            timeout=30,
             headers={
                 "Authorization": f"Bearer {panel.api_token}",
-                "Content-Type": "application/json",
                 "Accept": "application/json",
+                "Content-Type": "application/json",
             },
         )
 
@@ -41,6 +52,9 @@ class SanaeiClient:
         **kwargs,
     ) -> dict:
 
+        if not path.startswith("/"):
+            path = "/" + path
+
         resp = await self._client.request(
             method,
             path,
@@ -52,8 +66,10 @@ class SanaeiClient:
         except Exception:
 
             raise SanaeiApiError(
-                f"پاسخ نامعتبر از پنل «{self.panel.name}» "
-                f"(HTTP {resp.status_code})"
+                f"پاسخ JSON معتبر نیست.\n"
+                f"HTTP: {resp.status_code}\n"
+                f"URL: {resp.url}\n"
+                f"Response: {resp.text[:1000]}"
             )
 
         if resp.status_code == 401:
@@ -66,23 +82,26 @@ class SanaeiClient:
 
             raise SanaeiApiError(
                 f"Endpoint پنل پیدا نشد.\n"
-                f"URL: {self.panel.url}{path}\n"
+                f"URL: {resp.url}\n"
                 f"HTTP: 404"
             )
 
         if resp.status_code >= 400:
 
             raise SanaeiApiError(
-                f"خطای پنل «{self.panel.name}»: "
-                f"{data.get('msg', data)}"
+                f"خطای HTTP پنل «{self.panel.name}»:\n"
+                f"HTTP: {resp.status_code}\n"
+                f"{data}"
             )
 
-        if not data.get("success", True):
+        if isinstance(data, dict):
 
-            raise SanaeiApiError(
-                f"خطای پنل «{self.panel.name}»: "
-                f"{data.get('msg', 'خطای نامشخص')}"
-            )
+            if data.get("success") is False:
+
+                raise SanaeiApiError(
+                    f"خطای پنل «{self.panel.name}»: "
+                    f"{data.get('msg', data)}"
+                )
 
         return data
 
@@ -98,6 +117,11 @@ class SanaeiClient:
         inbound_id: int | None = None,
     ) -> dict:
 
+        inbound_id = (
+            inbound_id
+            or self.panel.inbound_id
+        )
+
         email = (email or "").strip()
 
         if not email:
@@ -105,11 +129,6 @@ class SanaeiClient:
             raise SanaeiApiError(
                 "نام کانفیگ / email خالی است."
             )
-
-        inbound_id = (
-            inbound_id
-            or self.panel.inbound_id
-        )
 
         client_uuid = str(
             uuid.uuid4()
@@ -134,17 +153,23 @@ class SanaeiClient:
             else 0
         )
 
+        # ------------------------------------------------------
+        # طبق API واقعی پنل:
+        #
+        # /panel/api/clients/add
+        #
+        # فقط inbound و client را می‌فرستیم.
+        # ------------------------------------------------------
+
         client_obj = {
             "id": client_uuid,
             "email": email,
-            "enable": True,
+            "limitIp": 0,
             "totalGB": total_bytes,
             "expiryTime": expire_ms,
-            "limitIp": 0,
+            "enable": True,
             "tgId": 0,
             "subId": sub_id,
-            "flow": "",
-            "reset": 0,
         }
 
         payload = {
@@ -154,10 +179,20 @@ class SanaeiClient:
             "client": client_obj,
         }
 
-        await self._request(
+        data = await self._request(
             "POST",
-            f"{self.panel.api_base_path}/clients/add",
+            f"{self.api_base}/clients/add",
             json=payload,
+        )
+
+        # ------------------------------------------------------
+        # گرفتن Subscription
+        # ------------------------------------------------------
+
+        subscription_link = (
+            await self.get_subscription_link(
+                sub_id
+            )
         )
 
         return {
@@ -165,176 +200,223 @@ class SanaeiClient:
             "email": email,
             "sub_id": sub_id,
             "inbound_id": inbound_id,
+            "subscription_link": subscription_link,
+            "response": data,
         }
 
     # ==========================================================
-    # GET SUB LINKS
+    # SUBSCRIPTION
     # ==========================================================
 
     async def get_subscription_link(
-        self,
-        sub_id: str,
-    ) -> str:
+    self,
+    sub_id: str,
+) -> str:
 
-        if not sub_id:
+    url = (
+        f"{self.base_url}"
+        f"/clients/subLinks/{sub_id}"
+    )
 
-            raise SanaeiApiError(
-                "subId کلاینت خالی است."
-            )
+    response = await self.client.get(url)
 
-        path = (
-            f"{self.panel.api_base_path}"
-            f"/clients/subLinks/{quote(sub_id)}"
+    if response.status_code == 404:
+        raise SanaeiApiError(
+            "Endpoint دریافت Subscription در پنل پیدا نشد."
         )
 
-        resp = await self._client.get(path)
+    if response.status_code >= 400:
+        raise SanaeiApiError(
+            f"خطا در دریافت Subscription "
+            f"(HTTP {response.status_code})"
+        )
 
-        try:
-            data = resp.json()
-        except Exception:
+    try:
+        data = response.json()
+    except Exception:
+        raise SanaeiApiError(
+            "پاسخ API مربوط به Subscription معتبر نیست."
+        )
 
-            raise SanaeiApiError(
-                f"پاسخ subLinks قابل خواندن نیست.\n"
-                f"HTTP: {resp.status_code}\n"
-                f"BODY: {resp.text[:2000]}"
-            )
+    def find_link(obj):
 
-        if resp.status_code == 401:
+        if isinstance(obj, str):
+            value = obj.strip()
 
-            raise SanaeiApiError(
-                "احراز هویت API پنل برای subLinks رد شد."
-            )
-
-        if resp.status_code == 404:
-
-            raise SanaeiApiError(
-                f"Endpoint subLinks پیدا نشد.\n"
-                f"URL: {self.panel.url}{path}"
-            )
-
-        if resp.status_code >= 400:
-
-            raise SanaeiApiError(
-                f"خطای subLinks پنل.\n"
-                f"HTTP: {resp.status_code}\n"
-                f"Response: {data}"
-            )
-
-        # ======================================================
-        # استخراج لینک از هر ساختار ممکن
-        # ======================================================
-
-        def find_url(value):
-
-            # ------------------------------
-            # string
-            # ------------------------------
-
-            if isinstance(value, str):
-
-                value = value.strip()
-
-                if value.startswith(
-                    (
-                        "http://",
-                        "https://",
-                        "vless://",
-                        "vmess://",
-                        "trojan://",
-                        "ss://",
-                    )
-                ):
-                    return value
-
-                return None
-
-            # ------------------------------
-            # dict
-            # ------------------------------
-
-            if isinstance(value, dict):
-
-                # اول کلیدهای محتمل
-                preferred_keys = (
-                    "url",
-                    "link",
-                    "subLink",
-                    "subUrl",
-                    "subscription",
-                    "subscriptionLink",
-                    "subscriptionUrl",
-                    "sub",
-                    "sub_url",
-                    "sub_link",
-                )
-
-                for key in preferred_keys:
-
-                    if key in value:
-
-                        result = find_url(
-                            value[key]
-                        )
-
-                        if result:
-                            return result
-
-                # بعد تمام مقادیر
-                for item in value.values():
-
-                    result = find_url(item)
-
-                    if result:
-                        return result
-
-                return None
-
-            # ------------------------------
-            # list
-            # ------------------------------
-
-            if isinstance(value, list):
-
-                for item in value:
-
-                    result = find_url(item)
-
-                    if result:
-                        return result
-
-                return None
+            if (
+                value.startswith("http://")
+                or value.startswith("https://")
+            ):
+                return value
 
             return None
 
-        link = find_url(data)
+        if isinstance(obj, dict):
 
-        if link:
+            # کلیدهای احتمالی
+            for key in (
+                "subscription",
+                "subscriptionLink",
+                "subscriptionUrl",
+                "subLink",
+                "subUrl",
+                "url",
+                "link",
+            ):
+                value = obj.get(key)
 
-            return link
+                found = find_link(value)
 
-        # ======================================================
-        # لینک پیدا نشد
-        #
-        # پاسخ واقعی را در خطا نمایش می‌دهیم تا دقیقاً بفهمیم
-        # API پنل شما چه چیزی برمی‌گرداند.
-        # ======================================================
+                if found:
+                    return found
 
-        import json
+            # جستجوی recursive
+            for value in obj.values():
 
-        pretty = json.dumps(
-            data,
-            ensure_ascii=False,
-            indent=2,
-        )
+                found = find_link(value)
 
+                if found:
+                    return found
+
+        elif isinstance(obj, list):
+
+            for item in obj:
+
+                found = find_link(item)
+
+                if found:
+                    return found
+
+        return None
+
+    link = find_link(data)
+
+    if not link:
         raise SanaeiApiError(
-            "API پنل subLinks پاسخ داد اما لینک پیدا نشد.\n\n"
-            "پاسخ واقعی پنل:\n"
-            f"{pretty[:5000]}"
+            "API پنل پاسخ داد اما لینک Subscription "
+            "در پاسخ پیدا نشد."
         )
+
+    return link
 
     # ==========================================================
-    # TRAFFIC
+    # EXTRACT SUB LINK
+    # ==========================================================
+
+    @staticmethod
+    def _extract_subscription_link(
+        data,
+    ) -> str | None:
+
+        # ------------------------------------------------------
+        # اگر مستقیماً string باشد
+        # ------------------------------------------------------
+
+        if isinstance(data, str):
+
+            text = data.strip()
+
+            if (
+                text.startswith("http://")
+                or text.startswith("https://")
+            ):
+                return text
+
+        # ------------------------------------------------------
+        # اگر list باشد
+        # ------------------------------------------------------
+
+        if isinstance(data, list):
+
+            for item in data:
+
+                result = (
+                    SanaeiClient
+                    ._extract_subscription_link(item)
+                )
+
+                if result:
+                    return result
+
+        # ------------------------------------------------------
+        # اگر dict باشد
+        # ------------------------------------------------------
+
+        if isinstance(data, dict):
+
+            # کلیدهای رایج
+            possible_keys = (
+                "subLink",
+                "subUrl",
+                "subURL",
+                "subscription",
+                "subscriptionLink",
+                "subscriptionUrl",
+                "subscriptionURL",
+                "url",
+                "link",
+                "sub",
+            )
+
+            for key in possible_keys:
+
+                value = data.get(key)
+
+                result = (
+                    SanaeiClient
+                    ._extract_subscription_link(value)
+                )
+
+                if result:
+                    return result
+
+            # ساختارهایی مثل:
+            #
+            # {
+            #   "obj": {...}
+            # }
+            #
+            # یا:
+            #
+            # {
+            #   "data": {...}
+            # }
+
+            for key in (
+                "obj",
+                "data",
+                "result",
+                "response",
+            ):
+
+                value = data.get(key)
+
+                result = (
+                    SanaeiClient
+                    ._extract_subscription_link(value)
+                )
+
+                if result:
+                    return result
+
+            # --------------------------------------------------
+            # جستجوی عمیق در تمام مقادیر
+            # --------------------------------------------------
+
+            for value in data.values():
+
+                result = (
+                    SanaeiClient
+                    ._extract_subscription_link(value)
+                )
+
+                if result:
+                    return result
+
+        return None
+
+    # ==========================================================
+    # CLIENT TRAFFIC
     # ==========================================================
 
     async def get_client_traffic(
@@ -344,12 +426,15 @@ class SanaeiClient:
 
         data = await self._request(
             "GET",
-            f"{self.panel.api_base_path}"
-            f"/inbounds/getClientTraffics/"
+            f"{self.api_base}/inbounds/getClientTraffics/"
             f"{quote(email)}",
         )
 
-        return data.get("obj")
+        if isinstance(data, dict):
+
+            return data.get("obj")
+
+        return None
 
     # ==========================================================
     # DELETE CLIENT
@@ -363,9 +448,9 @@ class SanaeiClient:
 
         await self._request(
             "POST",
-            f"{self.panel.api_base_path}"
-            f"/inbounds/{inbound_id}"
-            f"/delClient/{client_uuid}",
+            f"{self.api_base}/inbounds/"
+            f"{inbound_id}/delClient/"
+            f"{client_uuid}",
         )
 
     # ==========================================================
@@ -375,3 +460,104 @@ class SanaeiClient:
     async def close(self) -> None:
 
         await self._client.aclose()
+
+
+# ==============================================================
+# LEGACY CONFIG LINK
+# ==============================================================
+
+def build_config_link(
+    panel: PanelConfig,
+    inbound: dict,
+    client_uuid: str,
+    email: str,
+) -> str:
+
+    stream_settings = json.loads(
+        inbound.get("streamSettings") or "{}"
+    )
+
+    network = stream_settings.get(
+        "network",
+        "tcp",
+    )
+
+    security = stream_settings.get(
+        "security",
+        "none",
+    )
+
+    host = (
+        panel.url
+        .split("://")[-1]
+        .split(":")[0]
+    )
+
+    port = inbound.get("port")
+
+    remark = quote(
+        f"{panel.name}-{email}"
+    )
+
+    if panel.protocol == "vless":
+
+        params = [
+            f"type={network}",
+            f"security={security}",
+        ]
+
+        if security == "tls":
+
+            params.append(
+                "sni=" + host
+            )
+
+        if network == "ws":
+
+            path = (
+                stream_settings
+                .get("wsSettings", {})
+                .get("path", "/")
+            )
+
+            params.append(
+                "path=" + quote(path)
+            )
+
+        query = "&".join(params)
+
+        return (
+            f"vless://{client_uuid}"
+            f"@{host}:{port}"
+            f"?{query}"
+            f"#{remark}"
+        )
+
+    import base64
+
+    vmess_obj = {
+        "v": "2",
+        "ps": f"{panel.name}-{email}",
+        "add": host,
+        "port": port,
+        "id": client_uuid,
+        "aid": "0",
+        "net": network,
+        "type": "none",
+        "host": "",
+        "path": (
+            stream_settings
+            .get("wsSettings", {})
+            .get("path", "")
+        ),
+        "tls": security,
+    }
+
+    raw = json.dumps(
+        vmess_obj
+    ).encode()
+
+    return (
+        "vmess://"
+        + base64.b64encode(raw).decode()
+    )

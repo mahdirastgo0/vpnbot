@@ -300,3 +300,8 @@ class VpnConfig(Base):
     order: Mapped["Order"] = relationship(
         back_populates="vpn_config"
     )
+
+    subscription_link: Mapped[str | None] = mapped_column(
+    Text,
+    nullable=True,
+    )
