@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,7 @@ class SanaeiApiError(RuntimeError):
 class SanaeiClient:
 
     def __init__(self, panel: PanelConfig):
+
         self.panel = panel
 
         self._client = httpx.AsyncClient(
@@ -30,6 +32,10 @@ class SanaeiClient:
             },
         )
 
+    # ==========================================================
+    # REQUEST
+    # ==========================================================
+
     async def _request(
         self,
         method: str,
@@ -37,37 +43,40 @@ class SanaeiClient:
         **kwargs,
     ) -> dict:
 
-        resp = await self._client.request(
+        response = await self._client.request(
             method,
             path,
             **kwargs,
         )
 
-        text = resp.text
+        text = response.text
 
-        if resp.status_code == 404:
+        if response.status_code == 404:
             raise SanaeiApiError(
-                f"Endpoint پنل پیدا نشد.\n"
-                f"URL: {resp.request.url}\n"
-                f"HTTP: 404"
+                "Endpoint پنل پیدا نشد.\n"
+                f"URL: {response.request.url}\n"
+                f"HTTP: {response.status_code}"
             )
 
-        if resp.status_code == 401:
+        if response.status_code == 401:
             raise SanaeiApiError(
-                f"احراز هویت پنل «{self.panel.name}» رد شد."
+                f"احراز هویت پنل «{self.panel.name}» رد شد.\n"
+                "API Token را بررسی کن."
             )
 
-        if resp.status_code >= 400:
+        if response.status_code >= 400:
             raise SanaeiApiError(
-                f"خطای HTTP {resp.status_code} از پنل "
-                f"«{self.panel.name}»:\n{text[:1000]}"
+                f"خطای HTTP {response.status_code} از پنل "
+                f"«{self.panel.name}»:\n"
+                f"{text[:2000]}"
             )
 
         try:
-            data = resp.json()
+            data = response.json()
         except Exception:
             raise SanaeiApiError(
-                f"پاسخ JSON معتبر نیست:\n{text[:1000]}"
+                "پاسخ پنل JSON معتبر نیست:\n"
+                f"{text[:2000]}"
             )
 
         if not isinstance(data, dict):
@@ -83,6 +92,10 @@ class SanaeiClient:
 
         return data
 
+    # ==========================================================
+    # LIST INBOUNDS
+    # ==========================================================
+
     async def list_inbounds(self) -> list[dict]:
 
         data = await self._request(
@@ -93,9 +106,20 @@ class SanaeiClient:
         obj = data.get("obj") or []
 
         if isinstance(obj, dict):
-            return obj.get("inbounds", [])
 
-        return obj
+            if isinstance(obj.get("inbounds"), list):
+                return obj["inbounds"]
+
+            return []
+
+        if isinstance(obj, list):
+            return obj
+
+        return []
+
+    # ==========================================================
+    # ADD CLIENT
+    # ==========================================================
 
     async def add_client(
         self,
@@ -106,15 +130,19 @@ class SanaeiClient:
     ) -> dict:
 
         # ------------------------------------------------------
-        # نام کانفیگ = همان چیزی که کاربر وارد کرده
+        # نام کانفیگ = دقیقاً نامی که کاربر وارد کرده
         # ------------------------------------------------------
 
         email = (email or "").strip()
 
         if not email:
             raise SanaeiApiError(
-                "نام کانفیگ خالی است."
+                "client email is required"
             )
+
+        # ------------------------------------------------------
+        # inbound
+        # ------------------------------------------------------
 
         inbound_id = (
             inbound_id
@@ -127,61 +155,101 @@ class SanaeiClient:
                 "INBOUND_ID برای این پنل تنظیم نشده است."
             )
 
+        inbound_id = int(inbound_id)
+
+        # ------------------------------------------------------
+        # UUID
+        # ------------------------------------------------------
+
         client_uuid = str(uuid.uuid4())
 
-        expire_ms = int(
-            (
-                datetime.now(timezone.utc)
-                + timedelta(days=duration_days)
-            ).timestamp()
-            * 1000
-        )
+        # ------------------------------------------------------
+        # expiry
+        #
+        # اگر مدت 30 روز باشد:
+        # current time + 30 days
+        # ------------------------------------------------------
 
-        total_bytes = (
-            traffic_gb
-            * 1024
-            * 1024
-            * 1024
-            if traffic_gb > 0
-            else 0
-        )
+        if duration_days > 0:
+
+            expire_ms = int(
+                (
+                    datetime.now(timezone.utc)
+                    + timedelta(days=duration_days)
+                ).timestamp()
+                * 1000
+            )
+
+        else:
+            expire_ms = 0
 
         # ------------------------------------------------------
-        # مهم:
-        #
-        # API جدید پنل /clients/add یک Client را داخل
-        # inbound دریافت می‌کند.
-        #
-        # tgId باید عدد باشد، نه string.
+        # حجم
         # ------------------------------------------------------
+
+        if traffic_gb > 0:
+
+            total_bytes = (
+                traffic_gb
+                * 1024
+                * 1024
+                * 1024
+            )
+
+        else:
+
+            total_bytes = 0
+
+        # ======================================================
+        # CLIENT
+        #
+        # ساختار واقعی API پنل شما
+        #
+        # client:
+        # {
+        #   email,
+        #   subId,
+        #   id,
+        #   enable,
+        #   expiryTime,
+        #   totalGB,
+        #   limitIp,
+        #   tgId
+        # }
+        #
+        # auth/password را خود پنل تولید می‌کند.
+        # ======================================================
 
         client = {
-            "id": client_uuid,
             "email": email,
-            "limitIp": 0,
-            "totalGB": total_bytes,
-            "expiryTime": expire_ms,
-            "enable": True,
-            "tgId": 0,
             "subId": uuid.uuid4().hex[:16],
+            "id": client_uuid,
+            "enable": True,
+            "expiryTime": expire_ms,
+            "totalGB": total_bytes,
+            "limitIp": 0,
+            "tgId": 0,
         }
 
-        # ------------------------------------------------------
-        # API پنل:
+        # ======================================================
+        # PAYLOAD واقعی API
         #
-        # POST /panel/api/clients/add
-        #
-        # حداقل یکی از inboundها باید داخل درخواست باشد.
-        # ------------------------------------------------------
+        # {
+        #     "client": {...},
+        #     "inboundIds": [2, 8]
+        # }
+        # ======================================================
 
         payload = {
-            "inbounds": [
-                {
-                    "id": inbound_id,
-                    "client": client,
-                }
-            ]
+            "client": client,
+            "inboundIds": [
+                inbound_id
+            ],
         }
+
+        # ------------------------------------------------------
+        # POST /panel/api/clients/add
+        # ------------------------------------------------------
 
         data = await self._request(
             "POST",
@@ -189,9 +257,29 @@ class SanaeiClient:
             json=payload,
         )
 
-        # ------------------------------------------------------
-        # اطلاعات inbound را برای ساخت لینک بگیر
-        # ------------------------------------------------------
+        # ======================================================
+        # پاسخ API ممکن است Client ساخته‌شده را برگرداند.
+        # اگر UUID را پنل تغییر داده باشد، UUID واقعی را
+        # از پاسخ می‌گیریم.
+        # ======================================================
+
+        response_client = data.get("client")
+
+        if isinstance(response_client, dict):
+
+            real_uuid = response_client.get("id")
+
+            if real_uuid:
+                client_uuid = str(real_uuid)
+
+            real_email = response_client.get("email")
+
+            if real_email:
+                email = str(real_email)
+
+        # ======================================================
+        # دریافت inbound
+        # ======================================================
 
         inbounds = await self.list_inbounds()
 
@@ -199,12 +287,14 @@ class SanaeiClient:
             (
                 item
                 for item in inbounds
-                if int(item.get("id", 0)) == int(inbound_id)
+                if int(item.get("id", 0))
+                == inbound_id
             ),
             None,
         )
 
         if inbound is None:
+
             raise SanaeiApiError(
                 f"اینباند شماره {inbound_id} روی پنل "
                 f"«{self.panel.name}» پیدا نشد."
@@ -217,18 +307,29 @@ class SanaeiClient:
             "response": data,
         }
 
+    # ==========================================================
+    # GET CLIENT TRAFFIC
+    # ==========================================================
+
     async def get_client_traffic(
         self,
         email: str,
     ) -> dict | None:
 
+        email = (email or "").strip()
+
         data = await self._request(
             "GET",
-            f"{self.panel.api_base_path}/inbounds/"
-            f"getClientTraffics/{quote(email)}",
+            f"{self.panel.api_base_path}"
+            f"/inbounds/getClientTraffics/"
+            f"{quote(email)}",
         )
 
         return data.get("obj")
+
+    # ==========================================================
+    # DELETE CLIENT
+    # ==========================================================
 
     async def delete_client(
         self,
@@ -238,13 +339,23 @@ class SanaeiClient:
 
         await self._request(
             "POST",
-            f"{self.panel.api_base_path}/inbounds/"
-            f"{inbound_id}/delClient/{client_uuid}",
+            f"{self.panel.api_base_path}"
+            f"/inbounds/{inbound_id}"
+            f"/delClient/{client_uuid}",
         )
 
+    # ==========================================================
+    # CLOSE
+    # ==========================================================
+
     async def close(self) -> None:
+
         await self._client.aclose()
 
+
+# ==============================================================
+# BUILD CONFIG LINK
+# ==============================================================
 
 def build_config_link(
     panel: PanelConfig,
@@ -253,9 +364,20 @@ def build_config_link(
     email: str,
 ) -> str:
 
-    stream_settings = json.loads(
-        inbound.get("streamSettings") or "{}"
+    stream_settings_raw = (
+        inbound.get("streamSettings")
+        or "{}"
     )
+
+    try:
+
+        stream_settings = json.loads(
+            stream_settings_raw
+        )
+
+    except Exception:
+
+        stream_settings = {}
 
     network = stream_settings.get(
         "network",
@@ -267,7 +389,16 @@ def build_config_link(
         "none",
     )
 
-    host = panel.url.split("://")[-1].split(":")[0]
+    # ----------------------------------------------------------
+    # HOST
+    # ----------------------------------------------------------
+
+    host = (
+        panel.url
+        .split("://")[-1]
+        .split(":")[0]
+        .split("/")[0]
+    )
 
     port = inbound.get("port")
 
@@ -275,9 +406,9 @@ def build_config_link(
         f"{panel.name}-{email}"
     )
 
-    # ----------------------------------------------------------
+    # ==========================================================
     # VLESS
-    # ----------------------------------------------------------
+    # ==========================================================
 
     if panel.protocol.lower() == "vless":
 
@@ -286,10 +417,19 @@ def build_config_link(
             f"security={security}",
         ]
 
+        # ------------------------------------------------------
+        # TLS
+        # ------------------------------------------------------
+
         if security == "tls":
+
             params.append(
                 "sni=" + quote(host)
             )
+
+        # ------------------------------------------------------
+        # REALITY
+        # ------------------------------------------------------
 
         if security == "reality":
 
@@ -304,8 +444,12 @@ def build_config_link(
             )
 
             if server_names:
+
                 params.append(
-                    "sni=" + quote(server_names[0])
+                    "sni="
+                    + quote(
+                        str(server_names[0])
+                    )
                 )
 
             short_ids = reality.get(
@@ -314,61 +458,79 @@ def build_config_link(
             )
 
             if short_ids:
+
                 params.append(
-                    "sid=" + quote(short_ids[0])
+                    "sid="
+                    + quote(
+                        str(short_ids[0])
+                    )
                 )
+
+        # ------------------------------------------------------
+        # WebSocket
+        # ------------------------------------------------------
 
         if network == "ws":
 
-            ws_settings = stream_settings.get(
+            ws = stream_settings.get(
                 "wsSettings",
                 {},
             )
 
-            path = ws_settings.get(
+            path = ws.get(
                 "path",
                 "/",
             )
 
             params.append(
-                "path=" + quote(
+                "path="
+                + quote(
                     path,
                     safe="",
                 )
             )
 
-            headers = ws_settings.get(
+            headers = ws.get(
                 "headers",
                 {},
             )
 
-            host_header = headers.get(
+            ws_host = headers.get(
                 "Host"
             )
 
-            if host_header:
+            if ws_host:
+
                 params.append(
-                    "host=" + quote(
-                        host_header
+                    "host="
+                    + quote(
+                        str(ws_host)
                     )
                 )
 
+        # ------------------------------------------------------
+        # gRPC
+        # ------------------------------------------------------
+
         if network == "grpc":
 
-            grpc_settings = stream_settings.get(
+            grpc = stream_settings.get(
                 "grpcSettings",
                 {},
             )
 
-            service_name = grpc_settings.get(
+            service_name = grpc.get(
                 "serviceName",
                 "",
             )
 
             if service_name:
+
                 params.append(
                     "serviceName="
-                    + quote(service_name)
+                    + quote(
+                        str(service_name)
+                    )
                 )
 
         query = "&".join(params)
@@ -380,11 +542,9 @@ def build_config_link(
             f"#{remark}"
         )
 
-    # ----------------------------------------------------------
+    # ==========================================================
     # VMESS
-    # ----------------------------------------------------------
-
-    import base64
+    # ==========================================================
 
     vmess_obj = {
         "v": "2",
@@ -396,12 +556,10 @@ def build_config_link(
         "net": network,
         "type": "none",
         "host": "",
-        "path": stream_settings.get(
-            "wsSettings",
-            {},
-        ).get(
-            "path",
-            "",
+        "path": (
+            stream_settings
+            .get("wsSettings", {})
+            .get("path", "")
         ),
         "tls": (
             "tls"
