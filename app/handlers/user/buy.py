@@ -6,11 +6,21 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database.crud import create_order, get_plan
+from app.database.crud import (
+    create_order,
+    get_or_create_user,
+    get_plan,
+)
 from app.database.models import PaymentMethod
-from app.keyboards.payment_kb import payment_methods_kb
+from app.keyboards.payment_kb import (
+    payment_methods_kb,
+    zarinpal_pay_kb,
+)
 from app.keyboards.user_kb import config_name_kb
-from app.services.zarinpal import zarinpal
+from app.services.zarinpal import (
+    ZarinpalError,
+    request_payment,
+)
 from app.states.buy import BuyFlow
 from app.utils import texts
 
@@ -49,12 +59,10 @@ async def choose_plan(
         )
         return
 
-    # ذخیره پلن انتخاب‌شده
     await state.update_data(
         plan_id=plan.id,
     )
 
-    # رفتن به مرحله دریافت نام کانفیگ
     await state.set_state(
         BuyFlow.waiting_config_name
     )
@@ -68,7 +76,7 @@ async def choose_plan(
 
 
 # ==========================================================
-# دریافت اسم کانفیگ
+# دریافت نام کانفیگ
 # ==========================================================
 
 @router.message(
@@ -121,7 +129,6 @@ async def receive_config_name(
         )
         return
 
-    # ذخیره نام کانفیگ
     await state.update_data(
         config_name=name,
     )
@@ -143,16 +150,18 @@ async def receive_config_name(
         plan.plan_type,
     )
 
+    traffic = (
+        "نامحدود"
+        if plan.traffic_gb <= 0
+        else f"{plan.traffic_gb} GB"
+    )
+
     summary = texts.ORDER_SUMMARY.format(
         panel_name=panel.name,
         plan_type=plan_type,
         plan_name=plan.name,
         duration=plan.duration_days,
-        traffic=(
-            "نامحدود"
-            if plan.traffic_gb <= 0
-            else plan.traffic_gb
-        ),
+        traffic=traffic,
         amount=plan.price,
         currency=settings.CURRENCY_LABEL,
     )
@@ -174,7 +183,7 @@ async def receive_config_name(
 
 
 # ==========================================================
-# بازگشت از مرحله نام کانفیگ
+# نام پیش‌فرض کانفیگ
 # ==========================================================
 
 @router.callback_query(
@@ -238,16 +247,18 @@ async def use_default_config_name(
         plan.plan_type,
     )
 
+    traffic = (
+        "نامحدود"
+        if plan.traffic_gb <= 0
+        else f"{plan.traffic_gb} GB"
+    )
+
     summary = texts.ORDER_SUMMARY.format(
         panel_name=panel.name,
         plan_type=plan_type,
         plan_name=plan.name,
         duration=plan.duration_days,
-        traffic=(
-            "نامحدود"
-            if plan.traffic_gb <= 0
-            else plan.traffic_gb
-        ),
+        traffic=traffic,
         amount=plan.price,
         currency=settings.CURRENCY_LABEL,
     )
@@ -275,7 +286,6 @@ async def use_default_config_name(
 # ==========================================================
 
 @router.callback_query(
-    BuyFlow.waiting_config_name,
     F.data == "buy_cancel",
 )
 async def cancel_buy(
@@ -293,7 +303,7 @@ async def cancel_buy(
 
 
 # ==========================================================
-# پرداخت زرین پال
+# زرین پال
 # ==========================================================
 
 @router.callback_query(
@@ -329,20 +339,10 @@ async def pay_zarinpal(
         )
         return
 
-    # ------------------------------------------------------
-    # پیدا کردن کاربر
-    # ------------------------------------------------------
-
-    from app.database.crud import get_or_create_user
-
     user = await get_or_create_user(
         session,
         telegram_id=callback.from_user.id,
     )
-
-    # ------------------------------------------------------
-    # ساخت سفارش
-    # ------------------------------------------------------
 
     order = await create_order(
         session,
@@ -352,24 +352,18 @@ async def pay_zarinpal(
         config_name=config_name,
     )
 
-    # ------------------------------------------------------
-    # درخواست پرداخت
-    # ------------------------------------------------------
-
     try:
 
-        authority, pay_link = (
-            await zarinpal.request_payment(
-                amount_toman=plan.price,
-                description=(
-                    f"خرید پلن {plan.name} "
-                    f"- سفارش #{order.id}"
-                ),
-                order_id=order.id,
-            )
+        authority, pay_link = await request_payment(
+            amount_toman=plan.price,
+            description=(
+                f"خرید پلن {plan.name} "
+                f"- سفارش #{order.id}"
+            ),
+            order_id=order.id,
         )
 
-    except zarinpal.ZarinpalError as e:
+    except ZarinpalError as e:
 
         await callback.message.answer(
             "⚠️ خطا در اتصال به زرین‌پال:\n\n"
@@ -379,27 +373,11 @@ async def pay_zarinpal(
         await callback.answer()
         return
 
-    # ------------------------------------------------------
-    # ذخیره Authority
-    # ------------------------------------------------------
-
     order.zarinpal_authority = authority
 
     await session.commit()
 
-    # ------------------------------------------------------
-    # پاک کردن FSM
-    # ------------------------------------------------------
-
     await state.clear()
-
-    # ------------------------------------------------------
-    # ارسال لینک پرداخت
-    # ------------------------------------------------------
-
-    from app.keyboards.payment_kb import (
-        zarinpal_pay_kb,
-    )
 
     await callback.message.edit_text(
         texts.ZARINPAL_LINK,
@@ -412,7 +390,7 @@ async def pay_zarinpal(
 
 
 # ==========================================================
-# پرداخت کارت به کارت
+# کارت به کارت
 # ==========================================================
 
 @router.callback_query(
@@ -448,8 +426,6 @@ async def pay_card(
         )
         return
 
-    from app.database.crud import get_or_create_user
-
     user = await get_or_create_user(
         session,
         telegram_id=callback.from_user.id,
@@ -467,8 +443,9 @@ async def pay_card(
 
     await state.clear()
 
-    card_text = (
+    text = (
         "💳 <b>پرداخت کارت به کارت</b>\n\n"
+        f"🧾 سفارش: #{order.id}\n"
         f"📦 پلن: {plan.name}\n"
         f"📱 نام کانفیگ: {config_name}\n"
         f"💰 مبلغ: {plan.price:,} "
@@ -477,11 +454,11 @@ async def pay_card(
         f"👤 صاحب حساب: {settings.CARD_HOLDER_NAME}\n"
         f"💳 شماره کارت:\n"
         f"<code>{settings.CARD_NUMBER}</code>\n\n"
-        "بعد از پرداخت، رسید خود را ارسال کنید."
+        "پس از انتقال وجه، رسید پرداخت را ارسال کنید."
     )
 
     await callback.message.edit_text(
-        card_text,
+        text,
         parse_mode="HTML",
     )
 
@@ -489,7 +466,7 @@ async def pay_card(
 
 
 # ==========================================================
-# پرداخت کریپتو
+# کریپتو
 # ==========================================================
 
 @router.callback_query(
@@ -502,16 +479,9 @@ async def pay_crypto(
     state: FSMContext,
 ) -> None:
 
-    parts = callback.data.split(":")
-
-    if len(parts) < 3:
-        await callback.answer(
-            "اطلاعات پرداخت نامعتبر است.",
-            show_alert=True,
-        )
-        return
-
-    plan_id = int(parts[2])
+    plan_id = int(
+        callback.data.split(":")[2]
+    )
 
     data = await state.get_data()
 
@@ -532,37 +502,52 @@ async def pay_crypto(
         )
         return
 
-    await state.clear()
-
-    await callback.message.edit_text(
-        "🪙 پرداخت کریپتو\n\n"
-        f"📦 پلن: {plan.name}\n"
-        f"📱 نام کانفیگ: {config_name}\n"
-        f"💰 مبلغ: {plan.price:,} "
-        f"{settings.CURRENCY_LABEL}\n\n"
-        "⚠️ بخش پرداخت کریپتو باید بر اساس ارز "
-        "انتخاب‌شده ادامه پیدا کند."
+    user = await get_or_create_user(
+        session,
+        telegram_id=callback.from_user.id,
     )
 
-    await callback.answer()
+    order = await create_order(
+        session,
+        user,
+        plan,
+        PaymentMethod.CRYPTO,
+        config_name=config_name,
+    )
 
-
-# ==========================================================
-# انتخاب روش پرداخت
-# ==========================================================
-
-@router.callback_query(
-    F.data == "buy_back",
-)
-async def buy_back(
-    callback: CallbackQuery,
-    state: FSMContext,
-) -> None:
+    await session.commit()
 
     await state.clear()
 
+    wallets = settings.CRYPTO_WALLETS.active_wallets()
+
+    if not wallets:
+        await callback.message.edit_text(
+            "❌ در حال حاضر پرداخت ارز دیجیتال فعال نیست."
+        )
+        await callback.answer()
+        return
+
+    wallet_text = "\n".join(
+        f"• {coin.upper()}: <code>{address}</code>"
+        for coin, address in wallets.items()
+    )
+
+    text = (
+        "🪙 <b>پرداخت ارز دیجیتال</b>\n\n"
+        f"🧾 سفارش: #{order.id}\n"
+        f"📦 پلن: {plan.name}\n"
+        f"📱 نام کانفیگ: {config_name}\n"
+        f"💰 مبلغ معادل: {plan.price:,} "
+        f"{settings.CURRENCY_LABEL}\n\n"
+        "آدرس‌های پرداخت:\n"
+        f"{wallet_text}\n\n"
+        "بعد از پرداخت، اطلاعات تراکنش را ارسال کنید."
+    )
+
     await callback.message.edit_text(
-        "خرید لغو شد."
+        text,
+        parse_mode="HTML",
     )
 
     await callback.answer()
