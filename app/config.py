@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-
 load_dotenv(".env")
 load_dotenv("panel.env", override=False)
 load_dotenv("plans.env", override=False)
@@ -16,12 +15,11 @@ def _get(
     default: str | None = None,
     required: bool = False,
 ) -> str:
-
     value = os.getenv(key, default)
 
     if required and not value:
         raise RuntimeError(
-            f"متغیر محیطی الزامی «{key}» تنظیم نشده است."
+            f"متغیر محیطی الزامی «{key}» در فایل .env تنظیم نشده است."
         )
 
     return value or ""
@@ -31,7 +29,6 @@ def _get_bool(
     key: str,
     default: bool = False,
 ) -> bool:
-
     value = os.getenv(key)
 
     if value is None:
@@ -46,39 +43,38 @@ def _get_bool(
 
 
 def _get_int_list(key: str) -> list[int]:
-
     raw = os.getenv(key, "")
 
-    return [
-        int(x.strip())
-        for x in raw.split(",")
-        if x.strip()
-    ]
+    result = []
+
+    for item in raw.split(","):
+        item = item.strip()
+
+        if item:
+            result.append(int(item))
+
+    return result
 
 
 @dataclass
 class PanelConfig:
-
     key: str
     name: str
-
-    # مثال:
-    # https://panel.kenznum.ir:39217/aN1MrpoX46nkjnJyAr
     url: str
 
-    api_token: str
+    username: str
+    password: str
 
     inbound_id: int
 
     protocol: str = "vless"
 
-    # مسیر API قابل تنظیم است
+    # مسیر API پنل
     api_base_path: str = "/panel/api"
 
 
 @dataclass
 class PlanConfig:
-
     key: str
     panel_key: str
     plan_type: str
@@ -95,14 +91,12 @@ class PlanConfig:
 
 @dataclass
 class CryptoWallets:
-
     usdt_trc20: str
     usdt_bep20: str
     btc: str
     ton: str
 
     def active_wallets(self) -> dict[str, str]:
-
         return {
             key: value
             for key, value in self.__dict__.items()
@@ -113,12 +107,9 @@ class CryptoWallets:
 def _load_panels() -> dict[str, PanelConfig]:
 
     keys = [
-        x.strip()
-        for x in os.getenv(
-            "PANELS",
-            "",
-        ).split(",")
-        if x.strip()
+        key.strip()
+        for key in os.getenv("PANELS", "").split(",")
+        if key.strip()
     ]
 
     panels: dict[str, PanelConfig] = {}
@@ -128,7 +119,6 @@ def _load_panels() -> dict[str, PanelConfig]:
         prefix = f"PANEL_{key}_"
 
         panels[key] = PanelConfig(
-
             key=key,
 
             name=_get(
@@ -142,8 +132,13 @@ def _load_panels() -> dict[str, PanelConfig]:
                 required=True,
             ).rstrip("/"),
 
-            api_token=_get(
-                prefix + "API_TOKEN",
+            username=_get(
+                prefix + "USERNAME",
+                required=True,
+            ),
+
+            password=_get(
+                prefix + "PASSWORD",
                 required=True,
             ),
 
@@ -157,7 +152,7 @@ def _load_panels() -> dict[str, PanelConfig]:
             protocol=_get(
                 prefix + "PROTOCOL",
                 "vless",
-            ).lower(),
+            ).strip().lower(),
 
             api_base_path=_get(
                 prefix + "API_BASE_PATH",
@@ -171,12 +166,9 @@ def _load_panels() -> dict[str, PanelConfig]:
 def _load_plans() -> dict[str, PlanConfig]:
 
     keys = [
-        x.strip()
-        for x in os.getenv(
-            "PLANS",
-            "",
-        ).split(",")
-        if x.strip()
+        key.strip()
+        for key in os.getenv("PLANS", "").split(",")
+        if key.strip()
     ]
 
     plans: dict[str, PlanConfig] = {}
@@ -199,55 +191,58 @@ def _load_plans() -> dict[str, PlanConfig]:
             "DIRECT",
             "TUNNEL",
         ):
-
             raise RuntimeError(
-                f"نوع پلن «{plan_type}» نامعتبر است. "
+                f"نوع پلن «{plan_type}» برای "
+                f"PLAN_{key} نامعتبر است. "
                 f"فقط DIRECT یا TUNNEL مجاز است."
             )
 
-        plans[key] = PlanConfig(
+        name = _get(
+            prefix + "NAME",
+            required=True,
+        )
 
-            key=key,
-
-            panel_key=panel_key,
-
-            plan_type=plan_type,
-
-            name=_get(
-                prefix + "NAME",
+        duration_days = int(
+            _get(
+                prefix + "DAYS",
                 required=True,
-            ),
+            )
+        )
 
-            duration_days=int(
-                _get(
-                    prefix + "DAYS",
-                    required=True,
-                )
-            ),
+        traffic_gb = int(
+            _get(
+                prefix + "TRAFFIC",
+                required=True,
+            )
+        )
 
-            traffic_gb=int(
-                _get(
-                    prefix + "TRAFFIC",
-                    required=True,
-                )
-            ),
+        price = int(
+            _get(
+                prefix + "PRICE",
+                required=True,
+            )
+        )
 
-            price=int(
-                _get(
-                    prefix + "PRICE",
-                    required=True,
-                )
-            ),
+        is_active = _get_bool(
+            prefix + "ACTIVE",
+            True,
+        )
 
-            is_active=_get_bool(
-                prefix + "ACTIVE",
-                True,
-            ),
+        description = _get(
+            prefix + "DESCRIPTION",
+            "",
+        )
 
-            description=_get(
-                prefix + "DESCRIPTION",
-                "",
-            ),
+        plans[key] = PlanConfig(
+            key=key,
+            panel_key=panel_key,
+            plan_type=plan_type,
+            name=name,
+            duration_days=duration_days,
+            traffic_gb=traffic_gb,
+            price=price,
+            is_active=is_active,
+            description=description,
         )
 
     return plans
@@ -256,7 +251,6 @@ def _load_plans() -> dict[str, PlanConfig]:
 def _load_crypto_wallets() -> CryptoWallets:
 
     return CryptoWallets(
-
         usdt_trc20=_get(
             "CRYPTO_USDT_TRC20_ADDRESS"
         ),
@@ -276,6 +270,10 @@ def _load_crypto_wallets() -> CryptoWallets:
 
 
 class Settings:
+
+    # =========================================================
+    # BOT
+    # =========================================================
 
     BOT_TOKEN: str = _get(
         "BOT_TOKEN",
@@ -298,6 +296,10 @@ class Settings:
     FORCE_JOIN_CHANNEL_USERNAME: str = _get(
         "FORCE_JOIN_CHANNEL_USERNAME"
     )
+
+    # =========================================================
+    # DATABASE
+    # =========================================================
 
     DB_HOST: str = _get(
         "DB_HOST",
@@ -336,6 +338,10 @@ class Settings:
             f"{self.DB_NAME}"
         )
 
+    # =========================================================
+    # ZARINPAL
+    # =========================================================
+
     ZARINPAL_MERCHANT_ID: str = _get(
         "ZARINPAL_MERCHANT_ID",
         required=True,
@@ -363,6 +369,10 @@ class Settings:
         )
     )
 
+    # =========================================================
+    # CARD TO CARD
+    # =========================================================
+
     CARD_NUMBER: str = _get(
         "CARD_NUMBER"
     )
@@ -375,27 +385,33 @@ class Settings:
         "CARD_BANK_NAME"
     )
 
+    # =========================================================
+    # CURRENCY
+    # =========================================================
+
     CURRENCY_LABEL: str = _get(
         "CURRENCY_LABEL",
         "تومان",
     )
 
-    CRYPTO_WALLETS: CryptoWallets
+    # =========================================================
+    # PANELS / PLANS
+    # =========================================================
+
     PANELS: dict[str, PanelConfig]
     PLANS: dict[str, PlanConfig]
 
+    CRYPTO_WALLETS: CryptoWallets
+
     def __init__(self) -> None:
 
-        self.CRYPTO_WALLETS = (
-            _load_crypto_wallets()
-        )
+        self.CRYPTO_WALLETS = _load_crypto_wallets()
 
         self.PANELS = _load_panels()
 
         self.PLANS = _load_plans()
 
         if not self.PANELS:
-
             raise RuntimeError(
                 "حداقل یک پنل باید در PANELS تعریف شده باشد."
             )
@@ -407,7 +423,7 @@ class Settings:
                 raise RuntimeError(
                     f"پلن «{plan.key}» به پنل "
                     f"«{plan.panel_key}» اشاره می‌کند، "
-                    f"اما این پنل وجود ندارد."
+                    f"اما این پنل در PANELS وجود ندارد."
                 )
 
 
