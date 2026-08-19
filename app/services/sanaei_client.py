@@ -128,7 +128,6 @@ class SanaeiClient:
                 "نام کانفیگ / email خالی است."
             )
 
-        # UUID واقعی VLESS
         client_uuid = str(uuid.uuid4())
 
         # ------------------------------------------------------
@@ -161,9 +160,7 @@ class SanaeiClient:
             expire_ms = 0
 
         # ------------------------------------------------------
-        # subId را خودمان می‌سازیم تا کلاینت Subscription داشته
-        # باشد. ولی بعد از ساخت، subId واقعی را از خود پنل
-        # با GET client دریافت می‌کنیم.
+        # subId موقت
         # ------------------------------------------------------
 
         requested_sub_id = uuid.uuid4().hex[:16]
@@ -197,27 +194,22 @@ class SanaeiClient:
         )
 
         # ------------------------------------------------------
-        # پنل ممکن است subId را در پاسخ POST ندهد.
-        # بنابراین کلاینت را با email از خود پنل می‌خوانیم.
+        # دریافت اطلاعات واقعی کلاینت از پنل
         # ------------------------------------------------------
 
-        actual_client = await self.get_client(
-            email
-        )
+        actual_client = await self.get_client(email)
 
         if not actual_client:
             raise SanaeiApiError(
                 "کلاینت ساخته شد اما اطلاعات آن از پنل قابل دریافت نیست."
             )
 
-        # UUID واقعی
         actual_uuid = (
             actual_client.get("id")
             or actual_client.get("uuid")
             or client_uuid
         )
 
-        # subId واقعی پنل
         actual_sub_id = (
             actual_client.get("subId")
             or actual_client.get("subID")
@@ -230,37 +222,40 @@ class SanaeiClient:
             )
 
         # ------------------------------------------------------
-        # لینک‌های تکی کلاینت
+        # لینک‌های تکی
         # ------------------------------------------------------
 
-        individual_links = await self.get_client_links(
-            email
-        )
+        individual_links = await self.get_client_links(email)
 
         # ------------------------------------------------------
-        # دریافت لیست لینک‌های سابسکریپشن از پنل
+        # دریافت لینک‌های سابسکریپشن از پنل
         # ------------------------------------------------------
 
         subscription_links = []
         try:
             subscription_links = await self.get_subscription_links(actual_sub_id)
         except SanaeiApiError:
-            # در صورت بروز خطا (مثلاً subLinks وجود ندارد)، لیست خالی در نظر گرفته می‌شود
+            # در صورت خطا، لیست خالی در نظر گرفته می‌شود
             subscription_links = []
 
         # ------------------------------------------------------
         # تعیین لینک اصلی سابسکریپشن
-        # اگر پنل لینکی ارائه داده باشد از آن استفاده می‌کنیم
-        # در غیر این صورت خودمان بر اساس ساختار پنل می‌سازیم
         # ------------------------------------------------------
 
         if subscription_links:
             subscription_link = subscription_links[0]
         else:
+            # خودمان لینک می‌سازیم
             subscription_link = self.build_subscription_url(actual_sub_id)
 
+        # ** چک نهایی **
+        if not subscription_link:
+            raise SanaeiApiError(
+                "لینک Subscription برای کلاینت از پنل دریافت نشد و امکان ساخت آن وجود ندارد."
+            )
+
         # ------------------------------------------------------
-        # خروجی نهایی
+        # خروجی
         # ------------------------------------------------------
 
         return {
@@ -268,12 +263,9 @@ class SanaeiClient:
             "email": email,
             "sub_id": str(actual_sub_id),
             "inbound_id": int(inbound_id),
-
             "subscription_link": subscription_link,
-            "subscription_links": subscription_links,   # <-- اضافه شد
-
+            "subscription_links": subscription_links,
             "individual_links": individual_links,
-
             "response": data,
             "client": actual_client,
         }
@@ -304,8 +296,6 @@ class SanaeiClient:
 
     # ==========================================================
     # GET CLIENT LINKS
-    #
-    # این endpoint لینک‌های واقعی VLESS/VMess/... را می‌دهد.
     # ==========================================================
 
     async def get_client_links(
@@ -389,12 +379,7 @@ class SanaeiClient:
         return links
 
     # ==========================================================
-    # GET SUBSCRIPTION LINK
-    #
-    # برای لینک subscription واقعی:
-    #
-    # https://DOMAIN/sub/SUB_ID
-    #
+    # GET SUBSCRIPTION LINK (قدیمی، برای سازگاری)
     # ==========================================================
 
     async def get_subscription_link(
@@ -402,33 +387,20 @@ class SanaeiClient:
         sub_id: str,
     ) -> str | None:
 
-        links = await self.get_subscription_links(
-            sub_id
-        )
-
-        # اگر API subLinks آرایه خالی داد،
-        # این endpoint به معنی "لینک subscription"
-        # نیست و نباید از آن URL جعلی بسازیم.
-        #
-        # بنابراین فعلاً None برمی‌گردانیم.
+        links = await self.get_subscription_links(sub_id)
         if not links:
             return None
-
         return links[0]
 
     # ==========================================================
-    # SUBSCRIPTION URL
-    #
-    # این تابع URL واقعی /sub/{subId} را می‌سازد.
-    # آدرس subscription از تنظیمات پنل می‌آید.
+    # BUILD SUBSCRIPTION URL
     # ==========================================================
 
     def build_subscription_url(
         self,
         sub_id: str,
-    ) -> str:
+    ) -> str | None:
 
-        # اگر پنل subscription_url داشته باشد
         subscription_base = getattr(
             self.panel,
             "subscription_url",
@@ -443,14 +415,14 @@ class SanaeiClient:
             )
 
         # fallback
-        #
-        # اگر subscription روی همان دامنه پنل باشد
         base_url = self.panel.url.rstrip("/")
+        if base_url:
+            return (
+                f"{base_url}/sub/"
+                f"{quote(str(sub_id))}"
+            )
 
-        return (
-            f"{base_url}/sub/"
-            f"{quote(str(sub_id))}"
-        )
+        return None
 
     # ==========================================================
     # CLIENT TRAFFIC

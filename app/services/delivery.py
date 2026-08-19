@@ -23,45 +23,23 @@ async def provision_and_deliver(
     user = order.user
 
     if plan is None:
-        raise SanaeiApiError(
-            "پلن سفارش پیدا نشد."
-        )
+        raise SanaeiApiError("پلن سفارش پیدا نشد.")
 
     if user is None:
-        raise SanaeiApiError(
-            "کاربر سفارش پیدا نشد."
-        )
+        raise SanaeiApiError("کاربر سفارش پیدا نشد.")
 
-    # ==========================================================
-    # PANEL
-    # ==========================================================
-
-    panel = settings.PANELS.get(
-        plan.panel_key
-    )
-
+    panel = settings.PANELS.get(plan.panel_key)
     if panel is None:
-        raise SanaeiApiError(
-            f"پنل «{plan.panel_key}» پیدا نشد."
-        )
-
-    # ==========================================================
-    # CONFIG NAME
-    # ==========================================================
+        raise SanaeiApiError(f"پنل «{plan.panel_key}» پیدا نشد.")
 
     email = (
         (order.config_name or "").strip()
         or f"user-{user.telegram_id}-{order.id}"
     )
 
-    # ==========================================================
-    # CREATE CLIENT
-    # ==========================================================
-
     client = SanaeiClient(panel)
 
     try:
-
         result = await client.add_client(
             email=email,
             traffic_gb=plan.traffic_gb,
@@ -71,34 +49,23 @@ async def provision_and_deliver(
 
         client_uuid = result["client_uuid"]
         sub_id = result["sub_id"]
-
-        # لینک اصلی سابسکریپشن (که یا از پنل گرفته شده یا خودمان ساختیم)
         subscription_link = result["subscription_link"]
-
-        # لیست لینک‌های سابسکریپشن (که از پنل دریافت شده، ممکن است خالی باشد)
         subscription_links = result.get("subscription_links", [])
-
         individual_links = result.get("individual_links", [])
 
         # ======================================================
-        # EXPIRY
+        # تاریخ انقضا
         # ======================================================
 
-        expire_at = (
-            datetime.now(timezone.utc)
-            + timedelta(
-                days=plan.duration_days
-            )
-        )
+        expire_at = datetime.now(timezone.utc) + timedelta(days=plan.duration_days)
 
         # ======================================================
-        # VPN CONFIG
+        # ذخیره در دیتابیس
         # ======================================================
 
         vpn_config = order.vpn_config
 
         if vpn_config is None:
-
             vpn_config = VpnConfig(
                 order_id=order.id,
                 user_id=user.id,
@@ -114,11 +81,8 @@ async def provision_and_deliver(
                 expire_at=expire_at,
                 subscription_link=subscription_link,
             )
-
             session.add(vpn_config)
-
         else:
-
             vpn_config.panel_key = panel.key
             vpn_config.plan_type = plan.plan_type
             vpn_config.plan_name = plan.name
@@ -134,14 +98,10 @@ async def provision_and_deliver(
         await session.commit()
 
         # ======================================================
-        # MESSAGE
+        # ارسال پیام به کاربر
         # ======================================================
 
-        traffic_text = (
-            "نامحدود"
-            if plan.traffic_gb <= 0
-            else f"{plan.traffic_gb} GB"
-        )
+        traffic_text = "نامحدود" if plan.traffic_gb <= 0 else f"{plan.traffic_gb} GB"
 
         text = (
             "🎉 <b>خرید شما با موفقیت انجام شد!</b>\n\n"
@@ -152,8 +112,7 @@ async def provision_and_deliver(
             f"📱 <b>نام کانفیگ:</b> {email}\n\n"
             "🔗 <b>Subscription:</b>\n"
             f"<code>{subscription_link}</code>\n\n"
-            f"📡 <b>تعداد کانفیگ‌های تکی:</b> "
-            f"{len(subscription_links)}\n\n"
+            f"📡 <b>تعداد کانفیگ‌های تکی:</b> {len(subscription_links)}\n\n"
             "از بخش «📂 کانفیگ‌های من» می‌توانید "
             "Subscription و کانفیگ‌های تکی را دریافت کنید."
         )
