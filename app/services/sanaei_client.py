@@ -17,21 +17,21 @@ class SanaeiApiError(RuntimeError):
 class SanaeiClient:
 
     def __init__(self, panel: PanelConfig):
-
         self.panel = panel
 
-        base_url = panel.url.rstrip("/")
+        self.base_url = panel.url.rstrip("/")
 
-        api_base = getattr(
+        api_base_path = getattr(
             panel,
             "api_base_path",
             "/panel/api",
-        ).strip("/")
+        )
 
-        self.api_base = f"/{api_base}"
+        api_base_path = api_base_path.strip("/")
+        self.api_base = f"/{api_base_path}"
 
-        self._client = httpx.AsyncClient(
-            base_url=base_url,
+        self.client = httpx.AsyncClient(
+            base_url=self.base_url,
             verify=False,
             timeout=30,
             headers={
@@ -50,58 +50,61 @@ class SanaeiClient:
         method: str,
         path: str,
         **kwargs,
-    ) -> dict:
-
+    ):
         if not path.startswith("/"):
             path = "/" + path
 
-        resp = await self._client.request(
+        response = await self.client.request(
             method,
             path,
             **kwargs,
         )
 
         try:
-            data = resp.json()
+            data = response.json()
         except Exception:
-
             raise SanaeiApiError(
                 f"پاسخ JSON معتبر نیست.\n"
-                f"HTTP: {resp.status_code}\n"
-                f"URL: {resp.url}\n"
-                f"Response: {resp.text[:1000]}"
+                f"HTTP: {response.status_code}\n"
+                f"URL: {response.url}\n"
+                f"Response: {response.text[:1000]}"
             )
 
-        if resp.status_code == 401:
-
+        if response.status_code == 401:
             raise SanaeiApiError(
                 f"احراز هویت پنل «{self.panel.name}» رد شد."
             )
 
-        if resp.status_code == 404:
-
+        if response.status_code == 404:
             raise SanaeiApiError(
                 f"Endpoint پنل پیدا نشد.\n"
-                f"URL: {resp.url}\n"
+                f"URL: {response.url}\n"
                 f"HTTP: 404"
             )
 
-        if resp.status_code >= 400:
-
+        if response.status_code >= 400:
             raise SanaeiApiError(
                 f"خطای HTTP پنل «{self.panel.name}»:\n"
-                f"HTTP: {resp.status_code}\n"
+                f"HTTP: {response.status_code}\n"
                 f"{data}"
             )
 
         if isinstance(data, dict):
 
             if data.get("success") is False:
-
                 raise SanaeiApiError(
                     f"خطای پنل «{self.panel.name}»: "
                     f"{data.get('msg', data)}"
                 )
+
+            # بعضی نسخه‌های پنل:
+            # {"success": false, "msg": "..."}
+            if data.get("success") is not None:
+                if data.get("success") is False:
+                    raise SanaeiApiError(
+                        f"خطای پنل «{self.panel.name}»: "
+                        f"{data.get('msg', data)}"
+                    )
 
         return data
 
@@ -119,47 +122,51 @@ class SanaeiClient:
 
         inbound_id = (
             inbound_id
-            or self.panel.inbound_id
+            if inbound_id is not None
+            else self.panel.inbound_id
         )
+
+        if inbound_id is None:
+            raise SanaeiApiError(
+                "Inbound ID برای این پنل مشخص نشده است."
+            )
 
         email = (email or "").strip()
 
         if not email:
-
             raise SanaeiApiError(
                 "نام کانفیگ / email خالی است."
             )
 
-        client_uuid = str(
-            uuid.uuid4()
-        )
+        # UUID واقعی Client
+        client_uuid = str(uuid.uuid4())
 
-        sub_id = uuid.uuid4().hex[:16]
+        # زمان انقضا
+        if duration_days > 0:
+            expire_ms = int(
+                (
+                    datetime.now(timezone.utc)
+                    + timedelta(days=duration_days)
+                ).timestamp()
+                * 1000
+            )
+        else:
+            expire_ms = 0
 
-        expire_ms = int(
-            (
-                datetime.now(timezone.utc)
-                + timedelta(days=duration_days)
-            ).timestamp()
-            * 1000
-        )
-
+        # حجم
         total_bytes = (
-            traffic_gb
-            * 1024
-            * 1024
-            * 1024
+            traffic_gb * 1024 * 1024 * 1024
             if traffic_gb > 0
             else 0
         )
 
-        # ------------------------------------------------------
-        # طبق API واقعی پنل:
+        # ======================================================
+        # مهم:
         #
-        # /panel/api/clients/add
-        #
-        # فقط inbound و client را می‌فرستیم.
-        # ------------------------------------------------------
+        # tgId باید عدد باشد
+        # inboundIds باید خارج از client باشد
+        # email همان اسم انتخاب‌شده توسط کاربر است
+        # ======================================================
 
         client_obj = {
             "id": client_uuid,
@@ -169,13 +176,11 @@ class SanaeiClient:
             "expiryTime": expire_ms,
             "enable": True,
             "tgId": 0,
-            "subId": sub_id,
+            "subId": "",
         }
 
         payload = {
-            "inboundIds": [
-                inbound_id
-            ],
+            "inboundIds": [int(inbound_id)],
             "client": client_obj,
         }
 
@@ -185,63 +190,244 @@ class SanaeiClient:
             json=payload,
         )
 
-        # ------------------------------------------------------
-        # گرفتن Subscription
-        # ------------------------------------------------------
+        # ======================================================
+        # استخراج Client واقعی از پاسخ پنل
+        # ======================================================
 
-        subscription_link = (
-            await self.get_subscription_link(
-                sub_id
+        client_data = self._extract_client(data)
+
+        if client_data is None:
+            # اگر API موفق بود ولی ساختار پاسخ متفاوت بود،
+            # حداقل UUID خودمان را نگه می‌داریم.
+            client_data = {}
+
+        real_uuid = (
+            client_data.get("id")
+            or client_data.get("uuid")
+            or client_uuid
+        )
+
+        real_email = (
+            client_data.get("email")
+            or email
+        )
+
+        # ======================================================
+        # subId واقعی پنل
+        # ======================================================
+
+        sub_id = (
+            client_data.get("subId")
+            or client_data.get("subID")
+            or client_data.get("sub_id")
+        )
+
+        # بعضی نسخه‌های پنل subId را داخل data/object می‌گذارند.
+        if not sub_id:
+            sub_id = self._find_value(
+                data,
+                (
+                    "subId",
+                    "subID",
+                    "sub_id",
+                ),
             )
+
+        if not sub_id:
+            raise SanaeiApiError(
+                "کلاینت ساخته شد اما subId واقعی از پاسخ پنل دریافت نشد."
+            )
+
+        # ======================================================
+        # Subscription واقعی پنل
+        # ======================================================
+
+        subscription_link = await self.get_subscription_link(
+            str(sub_id)
         )
 
         return {
-            "client_uuid": client_uuid,
-            "email": email,
-            "sub_id": sub_id,
-            "inbound_id": inbound_id,
+            "client_uuid": str(real_uuid),
+            "email": str(real_email),
+            "sub_id": str(sub_id),
+            "inbound_id": int(inbound_id),
             "subscription_link": subscription_link,
             "response": data,
         }
 
     # ==========================================================
-    # SUBSCRIPTION
+    # EXTRACT CLIENT
+    # ==========================================================
+
+    @staticmethod
+    def _extract_client(data) -> dict | None:
+
+        if isinstance(data, dict):
+
+            # ساختار:
+            # {"client": {...}}
+            client = data.get("client")
+
+            if isinstance(client, dict):
+                return client
+
+            # ساختار:
+            # {"obj": {"client": {...}}}
+            obj = data.get("obj")
+
+            if isinstance(obj, dict):
+
+                client = obj.get("client")
+
+                if isinstance(client, dict):
+                    return client
+
+                # ممکن است خود obj کلاینت باشد
+                if (
+                    "email" in obj
+                    or "subId" in obj
+                    or "id" in obj
+                ):
+                    return obj
+
+            # ساختار:
+            # {"data": {"client": {...}}}
+            nested = data.get("data")
+
+            if isinstance(nested, dict):
+
+                client = nested.get("client")
+
+                if isinstance(client, dict):
+                    return client
+
+                if (
+                    "email" in nested
+                    or "subId" in nested
+                    or "id" in nested
+                ):
+                    return nested
+
+            # خود data
+            if (
+                "email" in data
+                or "subId" in data
+                or "id" in data
+            ):
+                return data
+
+        return None
+
+    # ==========================================================
+    # FIND VALUE
+    # ==========================================================
+
+    @staticmethod
+    def _find_value(
+        obj,
+        keys: tuple[str, ...],
+    ):
+
+        if isinstance(obj, dict):
+
+            for key in keys:
+                if key in obj:
+                    value = obj[key]
+
+                    if value not in (
+                        None,
+                        "",
+                    ):
+                        return value
+
+            for value in obj.values():
+
+                result = SanaeiClient._find_value(
+                    value,
+                    keys,
+                )
+
+                if result not in (
+                    None,
+                    "",
+                ):
+                    return result
+
+        elif isinstance(obj, list):
+
+            for item in obj:
+
+                result = SanaeiClient._find_value(
+                    item,
+                    keys,
+                )
+
+                if result not in (
+                    None,
+                    "",
+                ):
+                    return result
+
+        return None
+
+    # ==========================================================
+    # SUBSCRIPTION LINK
     # ==========================================================
 
     async def get_subscription_link(
-    self,
-    sub_id: str,
-) -> str:
+        self,
+        sub_id: str,
+    ) -> str:
 
-    url = (
-        f"{self.base_url}"
-        f"/clients/subLinks/{sub_id}"
-    )
+        if not sub_id:
+            raise SanaeiApiError(
+                "subId برای دریافت Subscription خالی است."
+            )
 
-    response = await self.client.get(url)
-
-    if response.status_code == 404:
-        raise SanaeiApiError(
-            "Endpoint دریافت Subscription در پنل پیدا نشد."
+        response = await self.client.get(
+            f"{self.api_base}/clients/subLinks/{quote(str(sub_id))}"
         )
 
-    if response.status_code >= 400:
-        raise SanaeiApiError(
-            f"خطا در دریافت Subscription "
-            f"(HTTP {response.status_code})"
-        )
+        try:
+            data = response.json()
+        except Exception:
+            raise SanaeiApiError(
+                "پاسخ API مربوط به Subscription معتبر نیست."
+            )
 
-    try:
-        data = response.json()
-    except Exception:
-        raise SanaeiApiError(
-            "پاسخ API مربوط به Subscription معتبر نیست."
-        )
+        if response.status_code == 404:
+            raise SanaeiApiError(
+                "Endpoint دریافت Subscription در پنل پیدا نشد."
+            )
 
-    def find_link(obj):
+        if response.status_code >= 400:
+            raise SanaeiApiError(
+                f"خطا در دریافت Subscription "
+                f"(HTTP {response.status_code}): {data}"
+            )
 
-        if isinstance(obj, str):
-            value = obj.strip()
+        link = self._extract_subscription_link(data)
+
+        if not link:
+            raise SanaeiApiError(
+                "API پنل پاسخ داد اما لینک Subscription "
+                "در پاسخ پیدا نشد."
+            )
+
+        return link
+
+    # ==========================================================
+    # EXTRACT SUBSCRIPTION LINK
+    # ==========================================================
+
+    @staticmethod
+    def _extract_subscription_link(
+        data,
+    ) -> str | None:
+
+        if isinstance(data, str):
+
+            value = data.strip()
 
             if (
                 value.startswith("http://")
@@ -251,108 +437,30 @@ class SanaeiClient:
 
             return None
 
-        if isinstance(obj, dict):
-
-            # کلیدهای احتمالی
-            for key in (
-                "subscription",
-                "subscriptionLink",
-                "subscriptionUrl",
-                "subLink",
-                "subUrl",
-                "url",
-                "link",
-            ):
-                value = obj.get(key)
-
-                found = find_link(value)
-
-                if found:
-                    return found
-
-            # جستجوی recursive
-            for value in obj.values():
-
-                found = find_link(value)
-
-                if found:
-                    return found
-
-        elif isinstance(obj, list):
-
-            for item in obj:
-
-                found = find_link(item)
-
-                if found:
-                    return found
-
-        return None
-
-    link = find_link(data)
-
-    if not link:
-        raise SanaeiApiError(
-            "API پنل پاسخ داد اما لینک Subscription "
-            "در پاسخ پیدا نشد."
-        )
-
-    return link
-
-    # ==========================================================
-    # EXTRACT SUB LINK
-    # ==========================================================
-
-    @staticmethod
-    def _extract_subscription_link(
-        data,
-    ) -> str | None:
-
-        # ------------------------------------------------------
-        # اگر مستقیماً string باشد
-        # ------------------------------------------------------
-
-        if isinstance(data, str):
-
-            text = data.strip()
-
-            if (
-                text.startswith("http://")
-                or text.startswith("https://")
-            ):
-                return text
-
-        # ------------------------------------------------------
-        # اگر list باشد
-        # ------------------------------------------------------
-
         if isinstance(data, list):
 
             for item in data:
 
-                result = (
-                    SanaeiClient
-                    ._extract_subscription_link(item)
+                result = SanaeiClient._extract_subscription_link(
+                    item
                 )
 
                 if result:
                     return result
 
-        # ------------------------------------------------------
-        # اگر dict باشد
-        # ------------------------------------------------------
+            return None
 
         if isinstance(data, dict):
 
             # کلیدهای رایج
             possible_keys = (
-                "subLink",
-                "subUrl",
-                "subURL",
                 "subscription",
                 "subscriptionLink",
                 "subscriptionUrl",
                 "subscriptionURL",
+                "subLink",
+                "subUrl",
+                "subURL",
                 "url",
                 "link",
                 "sub",
@@ -360,54 +468,46 @@ class SanaeiClient:
 
             for key in possible_keys:
 
-                value = data.get(key)
+                if key in data:
 
-                result = (
-                    SanaeiClient
-                    ._extract_subscription_link(value)
-                )
+                    result = (
+                        SanaeiClient
+                        ._extract_subscription_link(
+                            data[key]
+                        )
+                    )
 
-                if result:
-                    return result
+                    if result:
+                        return result
 
-            # ساختارهایی مثل:
-            #
-            # {
-            #   "obj": {...}
-            # }
-            #
-            # یا:
-            #
-            # {
-            #   "data": {...}
-            # }
-
+            # ساختارهای تو در تو
             for key in (
-                "obj",
                 "data",
+                "obj",
                 "result",
                 "response",
             ):
 
-                value = data.get(key)
+                if key in data:
 
-                result = (
-                    SanaeiClient
-                    ._extract_subscription_link(value)
-                )
+                    result = (
+                        SanaeiClient
+                        ._extract_subscription_link(
+                            data[key]
+                        )
+                    )
 
-                if result:
-                    return result
+                    if result:
+                        return result
 
-            # --------------------------------------------------
-            # جستجوی عمیق در تمام مقادیر
-            # --------------------------------------------------
-
+            # جستجوی عمیق
             for value in data.values():
 
                 result = (
                     SanaeiClient
-                    ._extract_subscription_link(value)
+                    ._extract_subscription_link(
+                        value
+                    )
                 )
 
                 if result:
@@ -431,7 +531,6 @@ class SanaeiClient:
         )
 
         if isinstance(data, dict):
-
             return data.get("obj")
 
         return None
@@ -458,8 +557,7 @@ class SanaeiClient:
     # ==========================================================
 
     async def close(self) -> None:
-
-        await self._client.aclose()
+        await self.client.aclose()
 
 
 # ==============================================================
@@ -507,7 +605,6 @@ def build_config_link(
         ]
 
         if security == "tls":
-
             params.append(
                 "sni=" + host
             )
