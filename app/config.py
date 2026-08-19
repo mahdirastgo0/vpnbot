@@ -6,18 +6,18 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 
-# ============================================================
-# ENV FILES
-# ============================================================
+# ==========================================================
+# ENV
+# ==========================================================
 
 load_dotenv(".env")
 load_dotenv("panel.env", override=False)
 load_dotenv("plans.env", override=False)
 
 
-# ============================================================
+# ==========================================================
 # HELPERS
-# ============================================================
+# ==========================================================
 
 def _get(
     key: str,
@@ -25,14 +25,14 @@ def _get(
     required: bool = False,
 ) -> str:
 
-    value = os.getenv(key, default)
+    val = os.getenv(key, default)
 
-    if required and not value:
+    if required and not val:
         raise RuntimeError(
-            f"متغیر محیطی الزامی «{key}» تنظیم نشده است."
+            f"متغیر محیطی الزامی «{key}» در فایل .env تنظیم نشده است."
         )
 
-    return value or ""
+    return val or ""
 
 
 def _get_bool(
@@ -40,20 +40,22 @@ def _get_bool(
     default: bool = False,
 ) -> bool:
 
-    value = os.getenv(key)
+    val = os.getenv(key)
 
-    if value is None:
+    if val is None:
         return default
 
-    return value.strip().lower() in {
+    return val.strip().lower() in (
         "1",
         "true",
         "yes",
         "on",
-    }
+    )
 
 
-def _get_int_list(key: str) -> list[int]:
+def _get_int_list(
+    key: str,
+) -> list[int]:
 
     raw = os.getenv(key, "")
 
@@ -64,9 +66,9 @@ def _get_int_list(key: str) -> list[int]:
     ]
 
 
-# ============================================================
-# PANEL CONFIG
-# ============================================================
+# ==========================================================
+# PANEL
+# ==========================================================
 
 @dataclass
 class PanelConfig:
@@ -75,79 +77,123 @@ class PanelConfig:
     url: str
     api_token: str
     inbound_id: int
+
+    # آدرس واقعی سروری که کاربر باید به آن وصل شود
+    # این با URL پنل API فرق دارد.
     server_address: str
+
     protocol: str = "vless"
 
-# ============================================================
-# PLAN CONFIG
-# ============================================================
+    # مسیر API
+    api_base_path: str = "/panel/api"
+
+
+# ==========================================================
+# PLAN
+# ==========================================================
 
 @dataclass
 class PlanConfig:
-
     key: str
-
     panel_key: str
-
     plan_type: str
-
     name: str
-
     duration_days: int
-
     traffic_gb: int
-
     price: int
-
     is_active: bool
-
     description: str = ""
 
 
-# ============================================================
+# ==========================================================
 # LOAD PANELS
-# ============================================================
+# ==========================================================
 
 def _load_panels() -> dict[str, PanelConfig]:
+
+    raw_keys = os.getenv(
+        "PANELS",
+        "",
+    )
+
     keys = [
         k.strip()
-        for k in os.getenv("PANELS", "").split(",")
+        for k in raw_keys.split(",")
         if k.strip()
     ]
 
     panels: dict[str, PanelConfig] = {}
 
-    panels[key] = PanelConfig(
-    key=key,
-    name=_get(prefix + "NAME", key, required=True),
-    url=_get(prefix + "URL", required=True).rstrip("/"),
-    api_token=_get(prefix + "API_TOKEN", required=True),
-    inbound_id=int(
-        _get(prefix + "INBOUND_ID", required=True)
-    ),
-    server_address=_get(
-        prefix + "SERVER_ADDRESS",
-        required=True,
-    ),
-    protocol=_get(
-        prefix + "PROTOCOL",
-        "vless",
-    ),
-)
+    # ------------------------------------------------------
+    # بسیار مهم:
+    # PanelConfig باید داخل همین for ساخته شود.
+    # ------------------------------------------------------
+
+    for key in keys:
+
+        prefix = f"PANEL_{key}_"
+
+        panels[key] = PanelConfig(
+            key=key,
+
+            name=_get(
+                prefix + "NAME",
+                key,
+                required=True,
+            ),
+
+            # این فقط آدرس API پنل است
+            url=_get(
+                prefix + "URL",
+                required=True,
+            ).rstrip("/"),
+
+            api_token=_get(
+                prefix + "API_TOKEN",
+                required=True,
+            ),
+
+            # اینباندی که کلاینت داخل آن ساخته می‌شود
+            inbound_id=int(
+                _get(
+                    prefix + "INBOUND_ID",
+                    required=True,
+                )
+            ),
+
+            # IP / Domain واقعی اتصال کاربر
+            server_address=_get(
+                prefix + "SERVER_ADDRESS",
+                required=True,
+            ),
+
+            protocol=_get(
+                prefix + "PROTOCOL",
+                "vless",
+            ),
+
+            api_base_path=_get(
+                prefix + "API_BASE_PATH",
+                "/panel/api",
+            ).rstrip("/"),
+        )
+
+    return panels
 
 
-# ============================================================
+# ==========================================================
 # LOAD PLANS
-# ============================================================
+# ==========================================================
 
 def _load_plans() -> dict[str, PlanConfig]:
 
-    raw = os.getenv("PLANS", "")
-
     keys = [
-        x.strip()
-        for x in raw.split(",")
-        if x.strip()
+        k.strip()
+        for k in os.getenv(
+            "PLANS",
+            "",
+        ).split(",")
+        if k.strip()
     ]
 
     plans: dict[str, PlanConfig] = {}
@@ -164,67 +210,71 @@ def _load_plans() -> dict[str, PlanConfig]:
         plan_type = _get(
             prefix + "TYPE",
             required=True,
-        ).upper()
+        ).strip().upper()
 
-        if plan_type not in {
+        if plan_type not in (
             "DIRECT",
             "TUNNEL",
-        }:
+        ):
             raise RuntimeError(
-                f"نوع پلن {key} نامعتبر است: {plan_type}"
+                f"نوع پلن «{plan_type}» برای PLAN_{key} نامعتبر است. "
+                f"فقط DIRECT یا TUNNEL مجاز است."
             )
 
-        plans[key] = PlanConfig(
+        name = _get(
+            prefix + "NAME",
+            required=True,
+        )
 
-            key=key,
-
-            panel_key=panel_key,
-
-            plan_type=plan_type,
-
-            name=_get(
-                prefix + "NAME",
+        duration_days = int(
+            _get(
+                prefix + "DAYS",
                 required=True,
-            ),
+            )
+        )
 
-            duration_days=int(
-                _get(
-                    prefix + "DAYS",
-                    required=True,
-                )
-            ),
+        traffic_gb = int(
+            _get(
+                prefix + "TRAFFIC",
+                required=True,
+            )
+        )
 
-            traffic_gb=int(
-                _get(
-                    prefix + "TRAFFIC",
-                    required=True,
-                )
-            ),
+        price = int(
+            _get(
+                prefix + "PRICE",
+                required=True,
+            )
+        )
 
-            price=int(
-                _get(
-                    prefix + "PRICE",
-                    required=True,
-                )
-            ),
+        is_active = _get_bool(
+            prefix + "ACTIVE",
+            True,
+        )
 
-            is_active=_get_bool(
-                prefix + "ACTIVE",
-                True,
-            ),
+        description = _get(
+            prefix + "DESCRIPTION",
+            "",
+        )
 
-            description=_get(
-                prefix + "DESCRIPTION",
-                "",
-            ),
+        plans[key] = PlanConfig(
+            key=key,
+            panel_key=panel_key,
+            plan_type=plan_type,
+            name=name,
+            duration_days=duration_days,
+            traffic_gb=traffic_gb,
+            price=price,
+            is_active=is_active,
+            description=description,
         )
 
     return plans
 
 
-# ============================================================
+# ==========================================================
 # CRYPTO
-# ============================================================
+# ==========================================================
 
 @dataclass
 class CryptoWallets:
@@ -246,7 +296,6 @@ class CryptoWallets:
 def _load_crypto_wallets() -> CryptoWallets:
 
     return CryptoWallets(
-
         usdt_trc20=_get(
             "CRYPTO_USDT_TRC20_ADDRESS"
         ),
@@ -265,63 +314,63 @@ def _load_crypto_wallets() -> CryptoWallets:
     )
 
 
-# ============================================================
+# ==========================================================
 # SETTINGS
-# ============================================================
+# ==========================================================
 
 class Settings:
 
-    # --------------------------------------------------------
+    # ======================================================
     # BOT
-    # --------------------------------------------------------
+    # ======================================================
 
-    BOT_TOKEN = _get(
+    BOT_TOKEN: str = _get(
         "BOT_TOKEN",
         required=True,
     )
 
-    ADMIN_IDS = _get_int_list(
+    ADMIN_IDS: list[int] = _get_int_list(
         "ADMIN_IDS"
     )
 
-    SUPPORT_USERNAME = _get(
+    SUPPORT_USERNAME: str = _get(
         "SUPPORT_USERNAME",
         "@support",
     )
 
-    FORCE_JOIN_CHANNEL_ID = _get(
+    FORCE_JOIN_CHANNEL_ID: str = _get(
         "FORCE_JOIN_CHANNEL_ID"
     )
 
-    FORCE_JOIN_CHANNEL_USERNAME = _get(
+    FORCE_JOIN_CHANNEL_USERNAME: str = _get(
         "FORCE_JOIN_CHANNEL_USERNAME"
     )
 
-    # --------------------------------------------------------
+    # ======================================================
     # DATABASE
-    # --------------------------------------------------------
+    # ======================================================
 
-    DB_HOST = _get(
+    DB_HOST: str = _get(
         "DB_HOST",
         "localhost",
     )
 
-    DB_PORT = _get(
+    DB_PORT: str = _get(
         "DB_PORT",
         "5432",
     )
 
-    DB_NAME = _get(
+    DB_NAME: str = _get(
         "DB_NAME",
         required=True,
     )
 
-    DB_USER = _get(
+    DB_USER: str = _get(
         "DB_USER",
         required=True,
     )
 
-    DB_PASSWORD = _get(
+    DB_PASSWORD: str = _get(
         "DB_PASSWORD",
         required=True,
     )
@@ -331,90 +380,101 @@ class Settings:
 
         return (
             "postgresql+asyncpg://"
-            f"{self.DB_USER}:"
-            f"{self.DB_PASSWORD}@"
-            f"{self.DB_HOST}:"
-            f"{self.DB_PORT}/"
-            f"{self.DB_NAME}"
+            f"{self.DB_USER}:{self.DB_PASSWORD}"
+            f"@{self.DB_HOST}:{self.DB_PORT}"
+            f"/{self.DB_NAME}"
         )
 
-    # --------------------------------------------------------
+    # ======================================================
     # ZARINPAL
-    # --------------------------------------------------------
+    # ======================================================
 
-    ZARINPAL_MERCHANT_ID = _get(
+    ZARINPAL_MERCHANT_ID: str = _get(
         "ZARINPAL_MERCHANT_ID",
         required=True,
     )
 
-    ZARINPAL_SANDBOX = _get_bool(
+    ZARINPAL_SANDBOX: bool = _get_bool(
         "ZARINPAL_SANDBOX",
         True,
     )
 
-    ZARINPAL_CALLBACK_BASE_URL = _get(
+    ZARINPAL_CALLBACK_BASE_URL: str = _get(
         "ZARINPAL_CALLBACK_BASE_URL",
         "http://127.0.0.1:8080",
     )
 
-    CALLBACK_SERVER_HOST = _get(
+    CALLBACK_SERVER_HOST: str = _get(
         "CALLBACK_SERVER_HOST",
         "0.0.0.0",
     )
 
-    CALLBACK_SERVER_PORT = int(
+    CALLBACK_SERVER_PORT: int = int(
         _get(
             "CALLBACK_SERVER_PORT",
             "8080",
         )
     )
 
-    # --------------------------------------------------------
-    # CARD
-    # --------------------------------------------------------
+    # ======================================================
+    # CARD TO CARD
+    # ======================================================
 
-    CARD_NUMBER = _get(
+    CARD_NUMBER: str = _get(
         "CARD_NUMBER"
     )
 
-    CARD_HOLDER_NAME = _get(
+    CARD_HOLDER_NAME: str = _get(
         "CARD_HOLDER_NAME"
     )
 
-    CARD_BANK_NAME = _get(
+    CARD_BANK_NAME: str = _get(
         "CARD_BANK_NAME"
     )
 
-    # --------------------------------------------------------
+    # ======================================================
     # CURRENCY
-    # --------------------------------------------------------
+    # ======================================================
 
-    CURRENCY_LABEL = _get(
+    CURRENCY_LABEL: str = _get(
         "CURRENCY_LABEL",
         "تومان",
     )
 
-    # --------------------------------------------------------
-    # PANELS / PLANS
-    # --------------------------------------------------------
+    # ======================================================
+    # RUNTIME
+    # ======================================================
 
     CRYPTO_WALLETS: CryptoWallets
     PANELS: dict[str, PanelConfig]
     PLANS: dict[str, PlanConfig]
 
+    # ======================================================
+    # INIT
+    # ======================================================
+
     def __init__(self) -> None:
 
-        self.CRYPTO_WALLETS = _load_crypto_wallets()
+        self.CRYPTO_WALLETS = (
+            _load_crypto_wallets()
+        )
 
-        self.PANELS = _load_panels()
+        self.PANELS = (
+            _load_panels()
+        )
 
-        self.PLANS = _load_plans()
+        self.PLANS = (
+            _load_plans()
+        )
 
         if not self.PANELS:
-
             raise RuntimeError(
-                "هیچ پنلی در PANELS تعریف نشده است."
+                "حداقل یک پنل باید در PANELS تعریف شده باشد."
             )
+
+        # --------------------------------------------------
+        # بررسی پنل‌های پلن
+        # --------------------------------------------------
 
         for plan in self.PLANS.values():
 
@@ -423,8 +483,12 @@ class Settings:
                 raise RuntimeError(
                     f"پلن «{plan.key}» به پنل "
                     f"«{plan.panel_key}» اشاره می‌کند، "
-                    f"اما این پنل وجود ندارد."
+                    f"اما این پنل در PANELS وجود ندارد."
                 )
 
+
+# ==========================================================
+# GLOBAL SETTINGS
+# ==========================================================
 
 settings = Settings()
