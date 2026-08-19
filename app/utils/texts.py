@@ -76,9 +76,14 @@ MY_CONFIGS_ITEM = (
 MY_CONFIGS_FOOTER = "\nبرای دریافت لینک یا QR هر کانفیگ، روی دکمه‌ی مربوطه بزن 👇"
 CONFIG_NOT_FOUND = "این کانفیگ پیدا نشد یا مال تو نیست."
 CONFIG_QR_CAPTION = (
-    "📱 {config_name}\n"
-    "{panel_name} | {plan_name}\n\n"
-    "`{link}`"
+    "📂 <b>جزییات کانفیگ</b>\n\n"
+    "📌 <b>نام:</b> {config_name}\n"
+    "📦 <b>پلن:</b> {plan_name}\n"
+    "📊 <b>حجم:</b> {traffic_gb}\n"
+    "⏳ <b>انقضا:</b> {expire_at}\n\n"
+    "🔗 <b>لینک سابسکریپشن:</b>\n"
+    "<code>{subscription_link}</code>\n\n"
+    "⬇️ برای استفاده، لینک را در اپلیکیشن خود وارد کنید."
 )
 
 SUPPORT_TEXT = "برای ارتباط با پشتیبانی به آیدی زیر پیام بده:\n{support}"
