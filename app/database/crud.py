@@ -125,6 +125,14 @@ async def list_user_configs(session: AsyncSession, user_id: int) -> list[VpnConf
 async def get_vpn_config(session: AsyncSession, config_id: int) -> VpnConfig | None:
     return await session.get(VpnConfig, config_id)
 
+async def get_vpn_config_by_order(
+    session: AsyncSession,
+    order_id: int,
+) -> VpnConfig | None:
+    result = await session.execute(
+        select(VpnConfig).where(VpnConfig.order_id == order_id)
+    )
+    return result.scalar_one_or_none()
 
 async def list_pending_orders(session: AsyncSession, method: PaymentMethod | None = None) -> list[Order]:
     query = (

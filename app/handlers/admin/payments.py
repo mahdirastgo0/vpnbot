@@ -4,7 +4,12 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database.crud import get_order, list_pending_orders, mark_order_paid, mark_order_rejected
+from app.database.crud import (
+    get_order,
+    list_pending_orders,
+    mark_order_paid,
+    mark_order_rejected,
+)
 from app.database.models import OrderStatus
 from app.keyboards.admin_kb import order_review_kb
 from app.middlewares.admin_filter import IsAdmin
@@ -18,58 +23,190 @@ router.callback_query.filter(IsAdmin())
 
 
 @router.message(Command("pending"))
-async def pending_orders(message: Message, session: AsyncSession) -> None:
+async def pending_orders(
+    message: Message,
+    session: AsyncSession,
+) -> None:
+
     orders = await list_pending_orders(session)
+
     if not orders:
         await message.answer(texts.NO_PENDING_ORDERS)
         return
+
     for order in orders:
         text = (
-            f"سفارش #{order.id} — {order.payment_method.value}\n"
+            f"سفارش #{order.id} — "
+            f"{order.payment_method.value}\n"
             f"کاربر: {order.user.telegram_id}\n"
-            f"پلن: {order.plan.name} — {order.amount:,} {settings.CURRENCY_LABEL}\n"
+            f"پلن: {order.plan.name} — "
+            f"{order.amount:,} {settings.CURRENCY_LABEL}\n"
         )
+
         if order.crypto_tx_id:
             text += f"TxID: `{order.crypto_tx_id}`\n"
-        await message.answer(text, reply_markup=order_review_kb(order.id), parse_mode="Markdown")
+
+        await message.answer(
+            text,
+            reply_markup=order_review_kb(order.id),
+            parse_mode="Markdown",
+        )
 
 
 @router.callback_query(F.data.startswith("admin_approve:"))
-async def approve_order(callback: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
+async def approve_order(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    bot: Bot,
+) -> None:
+
     order_id = int(callback.data.split(":")[1])
-    order = await get_order(session, order_id)
-    if order is None or order.status != OrderStatus.PENDING:
-        await callback.answer("این سفارش دیگر در انتظار نیست.", show_alert=True)
+
+    order = await get_order(
+        session,
+        order_id,
+    )
+
+    # --------------------------------------------------
+    # بررسی سفارش
+    # --------------------------------------------------
+    if order is None:
+        await callback.answer(
+            "سفارش پیدا نشد.",
+            show_alert=True,
+        )
         return
 
-    await mark_order_paid(session, order, admin_id=callback.from_user.id)
+    if order.status != OrderStatus.PENDING:
+        await callback.answer(
+            "این سفارش دیگر در انتظار نیست.",
+            show_alert=True,
+        )
+        return
 
+    # --------------------------------------------------
+    # اول کانفیگ را بساز
+    #
+    # اگر ساخت کانفیگ شکست بخورد:
+    # سفارش همچنان PENDING باقی می‌ماند
+    # --------------------------------------------------
     try:
-        await provision_and_deliver(bot, session, order)
+        await provision_and_deliver(
+            bot,
+            session,
+            order,
+        )
+
     except SanaeiApiError as e:
-        await callback.message.answer(f"⚠️ پرداخت تایید شد ولی ساخت کانفیگ روی پنل خطا داد: {e}")
-        await callback.answer()
+        await callback.message.answer(
+            f"⚠️ پرداخت هنوز نهایی نشد.\n"
+            f"ساخت کانفیگ روی پنل خطا داد:\n\n"
+            f"{e}\n\n"
+            f"سفارش #{order.id} همچنان در انتظار است "
+            f"و می‌توانی دوباره تلاش کنی."
+        )
+
+        await callback.answer(
+            "ساخت کانفیگ ناموفق بود.",
+            show_alert=True,
+        )
         return
 
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(f"✅ سفارش #{order.id} تایید و کانفیگ برای کاربر ارسال شد.")
-    await callback.answer()
+    except Exception as e:
+        await callback.message.answer(
+            f"⚠️ ساخت کانفیگ برای سفارش #{order.id} "
+            f"با خطای غیرمنتظره مواجه شد.\n\n"
+            f"{e}\n\n"
+            f"سفارش همچنان در وضعیت انتظار باقی ماند."
+        )
+
+        await callback.answer(
+            "خطا در ساخت کانفیگ.",
+            show_alert=True,
+        )
+        return
+
+    # --------------------------------------------------
+    # کانفیگ با موفقیت ساخته شده
+    # حالا سفارش را PAID می‌کنیم
+    # --------------------------------------------------
+    await mark_order_paid(
+        session,
+        order,
+        admin_id=callback.from_user.id,
+    )
+
+    # حذف دکمه‌های تأیید/رد
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=None
+        )
+    except Exception:
+        pass
+
+    await callback.message.answer(
+        f"✅ سفارش #{order.id} تایید شد.\n"
+        f"🔐 کانفیگ با موفقیت ساخته و برای کاربر ارسال شد."
+    )
+
+    await callback.answer(
+        "سفارش با موفقیت تایید شد."
+    )
 
 
 @router.callback_query(F.data.startswith("admin_reject:"))
-async def reject_order(callback: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
+async def reject_order(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    bot: Bot,
+) -> None:
+
     order_id = int(callback.data.split(":")[1])
-    order = await get_order(session, order_id)
-    if order is None or order.status != OrderStatus.PENDING:
-        await callback.answer("این سفارش دیگر در انتظار نیست.", show_alert=True)
+
+    order = await get_order(
+        session,
+        order_id,
+    )
+
+    if order is None:
+        await callback.answer(
+            "سفارش پیدا نشد.",
+            show_alert=True,
+        )
         return
 
-    await mark_order_rejected(session, order, admin_id=callback.from_user.id)
+    if order.status != OrderStatus.PENDING:
+        await callback.answer(
+            "این سفارش دیگر در انتظار نیست.",
+            show_alert=True,
+        )
+        return
+
+    await mark_order_rejected(
+        session,
+        order,
+        admin_id=callback.from_user.id,
+    )
 
     await bot.send_message(
         order.user.telegram_id,
-        texts.ORDER_REJECTED_USER.format(order_id=order.id, support=settings.SUPPORT_USERNAME),
+        texts.ORDER_REJECTED_USER.format(
+            order_id=order.id,
+            support=settings.SUPPORT_USERNAME,
+        ),
     )
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(f"❌ سفارش #{order.id} رد شد.")
-    await callback.answer()
+
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=None
+        )
+    except Exception:
+        pass
+
+    await callback.message.answer(
+        f"❌ سفارش #{order.id} رد شد."
+    )
+
+    await callback.answer(
+        "سفارش رد شد."
+    )
