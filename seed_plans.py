@@ -1,12 +1,3 @@
-"""
-پلن‌ها از فایل plans.env خوانده می‌شوند.
-
-برای تغییر پلن‌ها فقط plans.env را تغییر بده
-و سپس:
-
-    python seed_plans.py
-"""
-
 import asyncio
 
 from app.config import settings
@@ -24,23 +15,35 @@ async def main() -> None:
 
     async with async_session() as session:
 
-        for data in settings.PLANS:
+        count = 0
 
-            plan_type = (
-                PlanType.DIRECT
-                if data.plan_type == "direct"
-                else PlanType.TUNNEL
-            )
+        for key, data in settings.PLANS.items():
+
+            if data.plan_type.upper() == "DIRECT":
+                plan_type = PlanType.DIRECT
+            elif data.plan_type.upper() == "TUNNEL":
+                plan_type = PlanType.TUNNEL
+            else:
+                print(
+                    f"❌ نوع پلن نامعتبر است: "
+                    f"{key} -> {data.plan_type}"
+                )
+                continue
+
+            plan_data = {
+                "panel_key": data.panel_key,
+                "plan_type": plan_type,
+                "name": data.name,
+                "description": data.description,
+                "duration_days": data.duration_days,
+                "traffic_gb": data.traffic_gb,
+                "price": data.price,
+                "is_active": data.is_active,
+            }
 
             plan = await upsert_plan(
                 session,
-                panel_key=data.panel_key,
-                plan_type=plan_type,
-                name=data.name,
-                duration_days=data.duration_days,
-                traffic_gb=data.traffic_gb,
-                price=data.price,
-                is_active=data.is_active,
+                **plan_data,
             )
 
             print(
@@ -50,9 +53,10 @@ async def main() -> None:
                 f"{plan.price:,} تومان"
             )
 
+            count += 1
+
     print(
-        f"\n✅ {len(settings.PLANS)} پلن "
-        f"با موفقیت ثبت/بروزرسانی شد."
+        f"\n✅ {count} پلن با موفقیت ثبت/بروزرسانی شد."
     )
 
 
