@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 load_dotenv(".env")
-load_dotenv("panels.env", override=False)
+load_dotenv("panels.env", override=True)
 load_dotenv("plans.env", override=False)
 
 
@@ -207,6 +207,8 @@ class Settings:
     # ==========================================================
     # BOT
     # ==========================================================
+
+    PLANS: list[PlanConfig]
 
     BOT_TOKEN: str = _get(
         "BOT_TOKEN",
