@@ -218,7 +218,7 @@ class SanaeiClient:
         individual_links = await self.get_client_links(email)
 
         # ------------------------------------------------------
-        # دریافت لینک‌های سابسکریپشن از پنل
+        # دریافت لینک‌های سابسکریپشن از پنل (احتمالاً خالی)
         # ------------------------------------------------------
 
         subscription_links = []
@@ -238,26 +238,23 @@ class SanaeiClient:
             subscription_link = subscription_links[0]
         else:
             # خودمان لینک می‌سازیم
-            subscription_link = self.build_subscription_url(actual_sub_id)
+            # اول از subscription_url تنظیمات پنل استفاده می‌کنیم
+            sub_base = getattr(self.panel, "subscription_url", None)
+            if not sub_base:
+                # اگر تنظیم نشده، از panel.url استفاده می‌کنیم و /sub را اضافه می‌کنیم
+                # اما ممکن است panel.url شامل مسیر api باشد، پس بهتر است از یک آدرس ثابت استفاده کنیم
+                # برای fallback، از panel.url بدون مسیر اضافی استفاده می‌کنیم
+                base = self.panel.url.rstrip("/")
+                # اگر base شامل /panel/api یا موارد مشابه بود، ممکن است نیاز به اصلاح داشته باشد.
+                # اما برای سادگی، همان را با /sub ترکیب می‌کنیم.
+                sub_base = f"{base}/sub"
+            subscription_link = f"{sub_base}/{quote(str(actual_sub_id))}"
 
-        # ======================================================
-        # FALLBACK قوی: اگر لینک ساخته نشد، با panel.url یک لینک می‌سازیم
-        # ======================================================
-        if not subscription_link:
-            base_url = self.panel.url.rstrip("/")
-            if base_url:
-                subscription_link = f"{base_url}/sub/{quote(str(actual_sub_id))}"
-                logger.warning(f"لینک سابسکریپشن با fallback ساخته شد: {subscription_link}")
-            else:
-                raise SanaeiApiError(
-                    f"امکان ساخت لینک Subscription وجود ندارد. "
-                    f"subId: {actual_sub_id}, panel.url: {self.panel.url}"
-                )
-
-        # چک نهایی
+        # اگر به هر دلیلی لینک ساخته نشد، خطا بده
         if not subscription_link:
             raise SanaeiApiError(
-                "لینک Subscription برای کلاینت از پنل دریافت نشد و امکان ساخت آن وجود ندارد."
+                f"امکان ساخت لینک Subscription وجود ندارد. "
+                f"subId: {actual_sub_id}, panel.url: {self.panel.url}"
             )
 
         # ------------------------------------------------------
@@ -399,7 +396,7 @@ class SanaeiClient:
         return links[0]
 
     # ==========================================================
-    # BUILD SUBSCRIPTION URL
+    # BUILD SUBSCRIPTION URL (دیگر استفاده نمی‌شود، اما نگه‌داری می‌شود)
     # ==========================================================
 
     def build_subscription_url(
