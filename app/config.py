@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 load_dotenv(".env")
-load_dotenv("panel.env", override=True)
+load_dotenv("panel.env", override=False)
 load_dotenv("plans.env", override=False)
 
 
@@ -66,101 +66,102 @@ class PlanConfig:
     is_active: bool
 
 
-def _load_plans() -> dict[str, PlanConfig]:
-    """
-    پلن‌ها از فایل plans.env خوانده می‌شوند.
-    """
-
-    plans: dict[str, PlanConfig] = {}
-
-    if not os.path.exists("plans.env"):
-        raise RuntimeError(
-            "فایل plans.env پیدا نشد."
-        )
-
-    plan_env: dict[str, str] = {}
-
-    with open("plans.env", "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-
-            if not line:
-                continue
-
-            if line.startswith("#"):
-                continue
-
-            if "=" not in line:
-                continue
-
-            key, value = line.split("=", 1)
-
-            plan_env[key.strip()] = value.strip()
-
+def _load_panels() -> dict[str, PanelConfig]:
     keys = [
         k.strip()
-        for k in plan_env.get("PLANS", "").split(",")
+        for k in os.getenv("PANELS", "").split(",")
         if k.strip()
     ]
 
-    if not keys:
-        raise RuntimeError(
-            "هیچ پلنی در plans.env تعریف نشده است."
+    panels: dict[str, PanelConfig] = {}
+
+    for key in keys:
+        prefix = f"PANEL_{key}_"
+
+        panels[key] = PanelConfig(
+            key=key,
+            name=_get(prefix + "NAME", key, required=True),
+            url=_get(prefix + "URL", required=True).rstrip("/"),
+            api_token=_get(prefix + "API_TOKEN", required=True),
+            inbound_id=int(
+                _get(prefix + "INBOUND_ID", required=True)
+            ),
+            protocol=_get(prefix + "PROTOCOL", "vless"),
         )
+
+    return panels
+
+
+def _load_plans() -> dict[str, PlanConfig]:
+    """
+    تمام پلن‌ها را از .env می‌خواند.
+
+    مثال:
+
+    PLANS=pol25,pol50
+
+    PLAN_pol25_PANEL=pol
+    PLAN_pol25_TYPE=DIRECT
+    PLAN_pol25_NAME=...
+    PLAN_pol25_DAYS=30
+    PLAN_pol25_TRAFFIC=25
+    PLAN_pol25_PRICE=60000
+    PLAN_pol25_ACTIVE=true
+    """
+
+    keys = [
+        k.strip()
+        for k in os.getenv("PLANS", "").split(",")
+        if k.strip()
+    ]
+
+    plans: dict[str, PlanConfig] = {}
 
     for key in keys:
         prefix = f"PLAN_{key}_"
 
-        panel_key = plan_env.get(prefix + "PANEL", "").strip()
+        panel_key = _get(
+            prefix + "PANEL",
+            required=True,
+        )
 
-        if not panel_key:
-            raise RuntimeError(
-                f"{prefix}PANEL در plans.env تنظیم نشده است."
-            )
-
-        plan_type = plan_env.get(prefix + "TYPE", "").strip().upper()
+        plan_type = _get(
+            prefix + "TYPE",
+            required=True,
+        ).strip().upper()
 
         if plan_type not in ("DIRECT", "TUNNEL"):
             raise RuntimeError(
-                f"نوع پلن {key} نامعتبر است: {plan_type}. "
+                f"نوع پلن «{plan_type}» برای PLAN_{key} نامعتبر است. "
                 f"فقط DIRECT یا TUNNEL مجاز است."
             )
 
-        name = plan_env.get(prefix + "NAME", "").strip()
-
-        if not name:
-            raise RuntimeError(
-                f"{prefix}NAME در plans.env تنظیم نشده است."
-            )
+        name = _get(
+            prefix + "NAME",
+            required=True,
+        )
 
         duration_days = int(
-            plan_env[prefix + "DAYS"]
+            _get(prefix + "DAYS", required=True)
         )
 
         traffic_gb = int(
-            plan_env[prefix + "TRAFFIC"]
+            _get(prefix + "TRAFFIC", required=True)
         )
 
         price = int(
-            plan_env[prefix + "PRICE"]
+            _get(prefix + "PRICE", required=True)
         )
 
-        active_raw = plan_env.get(
+        is_active = _get_bool(
             prefix + "ACTIVE",
-            "true"
+            True,
         )
 
-        is_active = active_raw.lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        )
-
-        description = plan_env.get(
+        description = _get(
             prefix + "DESCRIPTION",
             "",
-        ).strip()
+        )
 
         plans[key] = PlanConfig(
             key=key,
@@ -208,7 +209,7 @@ class Settings:
     # ==========================================================
 
     PLANS: list[PlanConfig]
-
+    
     BOT_TOKEN: str = _get(
         "BOT_TOKEN",
         required=True,
