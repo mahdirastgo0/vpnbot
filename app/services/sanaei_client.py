@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import httpx
 
@@ -133,44 +134,23 @@ class SanaeiClient:
             else 0
         )
 
-        # ======================================================
-        # Client
-        # ======================================================
-
         client_obj = {
-
             "id": client_uuid,
-
             "email": email,
-
             "enable": True,
-
             "totalGB": total_bytes,
-
             "expiryTime": expire_ms,
-
             "limitIp": 0,
-
-            # پنل این مقدار را int64 می‌خواهد
             "tgId": 0,
-
             "subId": sub_id,
-
             "flow": "",
-
             "reset": 0,
         }
 
-        # ======================================================
-        # API واقعی پنل شما
-        # ======================================================
-
         payload = {
-
             "inboundIds": [
                 inbound_id
             ],
-
             "client": client_obj,
         }
 
@@ -181,18 +161,14 @@ class SanaeiClient:
         )
 
         return {
-
             "client_uuid": client_uuid,
-
             "email": email,
-
             "sub_id": sub_id,
-
             "inbound_id": inbound_id,
         }
 
     # ==========================================================
-    # GET SUBSCRIPTION LINK
+    # GET SUB LINKS
     # ==========================================================
 
     async def get_subscription_link(
@@ -206,102 +182,155 @@ class SanaeiClient:
                 "subId کلاینت خالی است."
             )
 
-        data = await self._request(
-            "GET",
-            f"{self.panel.api_base_path}/clients/subLinks/{sub_id}",
+        path = (
+            f"{self.panel.api_base_path}"
+            f"/clients/subLinks/{quote(sub_id)}"
         )
 
+        resp = await self._client.get(path)
+
+        try:
+            data = resp.json()
+        except Exception:
+
+            raise SanaeiApiError(
+                f"پاسخ subLinks قابل خواندن نیست.\n"
+                f"HTTP: {resp.status_code}\n"
+                f"BODY: {resp.text[:2000]}"
+            )
+
+        if resp.status_code == 401:
+
+            raise SanaeiApiError(
+                "احراز هویت API پنل برای subLinks رد شد."
+            )
+
+        if resp.status_code == 404:
+
+            raise SanaeiApiError(
+                f"Endpoint subLinks پیدا نشد.\n"
+                f"URL: {self.panel.url}{path}"
+            )
+
+        if resp.status_code >= 400:
+
+            raise SanaeiApiError(
+                f"خطای subLinks پنل.\n"
+                f"HTTP: {resp.status_code}\n"
+                f"Response: {data}"
+            )
+
         # ======================================================
-        # پاسخ API ممکن است obj یا data باشد
+        # استخراج لینک از هر ساختار ممکن
         # ======================================================
 
-        obj = data.get("obj")
+        def find_url(value):
 
-        if obj is None:
-            obj = data.get("data")
+            # ------------------------------
+            # string
+            # ------------------------------
 
-        if obj is None:
-            obj = data
+            if isinstance(value, str):
 
-        # ------------------------------------------------------
-        # حالت‌های مختلف پاسخ پنل
-        # ------------------------------------------------------
+                value = value.strip()
 
-        if isinstance(obj, str):
-
-            if obj.startswith("http"):
-
-                return obj
-
-        if isinstance(obj, list):
-
-            for item in obj:
-
-                if isinstance(item, str) and item.startswith("http"):
-
-                    return item
-
-                if isinstance(item, dict):
-
-                    for key in (
-                        "url",
-                        "link",
-                        "subLink",
-                        "subscription",
-                    ):
-
-                        value = item.get(key)
-
-                        if (
-                            isinstance(value, str)
-                            and value.startswith("http")
-                        ):
-
-                            return value
-
-        if isinstance(obj, dict):
-
-            for key in (
-                "url",
-                "link",
-                "subLink",
-                "subscription",
-                "subscriptionLink",
-            ):
-
-                value = obj.get(key)
-
-                if (
-                    isinstance(value, str)
-                    and value.startswith("http")
+                if value.startswith(
+                    (
+                        "http://",
+                        "https://",
+                        "vless://",
+                        "vmess://",
+                        "trojan://",
+                        "ss://",
+                    )
                 ):
-
                     return value
 
-        # ------------------------------------------------------
-        # بعض نسخه‌ها ممکن است لینک را مستقیماً در data بدهند
-        # ------------------------------------------------------
+                return None
 
-        for key in (
-            "url",
-            "link",
-            "subLink",
-            "subscription",
-            "subscriptionLink",
-        ):
+            # ------------------------------
+            # dict
+            # ------------------------------
 
-            value = data.get(key)
+            if isinstance(value, dict):
 
-            if (
-                isinstance(value, str)
-                and value.startswith("http")
-            ):
+                # اول کلیدهای محتمل
+                preferred_keys = (
+                    "url",
+                    "link",
+                    "subLink",
+                    "subUrl",
+                    "subscription",
+                    "subscriptionLink",
+                    "subscriptionUrl",
+                    "sub",
+                    "sub_url",
+                    "sub_link",
+                )
 
-                return value
+                for key in preferred_keys:
+
+                    if key in value:
+
+                        result = find_url(
+                            value[key]
+                        )
+
+                        if result:
+                            return result
+
+                # بعد تمام مقادیر
+                for item in value.values():
+
+                    result = find_url(item)
+
+                    if result:
+                        return result
+
+                return None
+
+            # ------------------------------
+            # list
+            # ------------------------------
+
+            if isinstance(value, list):
+
+                for item in value:
+
+                    result = find_url(item)
+
+                    if result:
+                        return result
+
+                return None
+
+            return None
+
+        link = find_url(data)
+
+        if link:
+
+            return link
+
+        # ======================================================
+        # لینک پیدا نشد
+        #
+        # پاسخ واقعی را در خطا نمایش می‌دهیم تا دقیقاً بفهمیم
+        # API پنل شما چه چیزی برمی‌گرداند.
+        # ======================================================
+
+        import json
+
+        pretty = json.dumps(
+            data,
+            ensure_ascii=False,
+            indent=2,
+        )
 
         raise SanaeiApiError(
-            "API پنل subLinks پاسخ داد اما "
-            "لینک Subscription در پاسخ پیدا نشد."
+            "API پنل subLinks پاسخ داد اما لینک پیدا نشد.\n\n"
+            "پاسخ واقعی پنل:\n"
+            f"{pretty[:5000]}"
         )
 
     # ==========================================================
@@ -312,8 +341,6 @@ class SanaeiClient:
         self,
         email: str,
     ) -> dict | None:
-
-        from urllib.parse import quote
 
         data = await self._request(
             "GET",
