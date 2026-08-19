@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.database.models import Plan
 from app.database.crud import get_plan
-from app.keyboards.payment_kb import payment_methods_kb
-from app.keyboards.user_kb import config_name_kb
+from app.keyboards.user_kb import (
+    panels_kb,
+    plans_kb,
+    payment_methods_kb,
+    config_name_kb,
+)
 from app.states.buy import BuyFlow
 from app.utils import texts
 
@@ -16,17 +22,86 @@ from app.utils import texts
 router = Router(name="user_buy")
 
 
-PLAN_TYPE_LABELS = {
-    "DIRECT": "مستقیم",
-    "TUNNEL": "تانل",
-}
+# ============================================================
+# 🛒 خرید سرویس
+# ============================================================
+
+@router.message(F.text == "🛒 خرید سرویس")
+async def buy_service(
+    message: Message,
+    state: FSMContext,
+) -> None:
+
+    await state.clear()
+
+    if not settings.PANELS:
+        await message.answer(
+            "❌ در حال حاضر هیچ سروری برای فروش فعال نیست."
+        )
+        return
+
+    await message.answer(
+        "🌐 سرور مورد نظر خود را انتخاب کنید:",
+        reply_markup=panels_kb(),
+    )
+
+
+# ============================================================
+# انتخاب پنل
+# ============================================================
+
+@router.callback_query(F.data.startswith("panel:"))
+async def select_panel(
+    callback: CallbackQuery,
+    session: AsyncSession,
+) -> None:
+
+    panel_key = callback.data.split(":", 1)[1]
+
+    if panel_key not in settings.PANELS:
+        await callback.answer(
+            "❌ سرور پیدا نشد.",
+            show_alert=True,
+        )
+        return
+
+    result = await session.execute(
+        select(Plan)
+        .where(
+            Plan.panel_key == panel_key,
+            Plan.is_active.is_(True),
+        )
+        .order_by(Plan.id.asc())
+    )
+
+    plans = list(result.scalars().all())
+
+    if not plans:
+        await callback.message.edit_text(
+            "❌ برای این سرور در حال حاضر پلنی موجود نیست."
+        )
+        await callback.answer()
+        return
+
+    panel = settings.PANELS[panel_key]
+
+    await callback.message.edit_text(
+        f"🌐 سرور: {panel.name}\n\n"
+        f"📦 پلن مورد نظر خود را انتخاب کنید:",
+        reply_markup=plans_kb(
+            panel_key,
+            plans,
+        ),
+    )
+
+    await callback.answer()
 
 
 # ============================================================
 # انتخاب پلن
 # ============================================================
 
-@router.callback_query(F.data.startswith("buy:"))
+@router.callback_query(F.data.startswith("plan:"))
 async def select_plan(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -34,22 +109,36 @@ async def select_plan(
 ) -> None:
 
     try:
-        plan_id = int(callback.data.split(":", 1)[1])
+        plan_id = int(
+            callback.data.split(":", 1)[1]
+        )
     except (ValueError, IndexError):
         await callback.answer(
-            "پلن نامعتبر است.",
+            "❌ پلن نامعتبر است.",
             show_alert=True,
         )
         return
 
-    plan = await get_plan(session, plan_id)
+    plan = await get_plan(
+        session,
+        plan_id,
+    )
 
     if plan is None or not plan.is_active:
         await callback.answer(
-            "این پلن دیگر موجود نیست.",
+            "❌ این پلن دیگر موجود نیست.",
             show_alert=True,
         )
         return
+
+    if plan.panel_key not in settings.PANELS:
+        await callback.answer(
+            "❌ سرور این پلن در دسترس نیست.",
+            show_alert=True,
+        )
+        return
+
+    await state.clear()
 
     await state.update_data(
         plan_id=plan.id,
@@ -96,14 +185,15 @@ async def receive_config_name(
         return
 
     data = await state.get_data()
+
     plan_id = data.get("plan_id")
 
     if not plan_id:
         await state.clear()
 
         await message.answer(
-            "❌ سفارش پیدا نشد.\n"
-            "لطفاً دوباره از خرید سرویس شروع کن."
+            "❌ اطلاعات خرید پیدا نشد.\n"
+            "لطفاً دوباره از «🛒 خرید سرویس» شروع کن."
         )
         return
 
@@ -120,10 +210,6 @@ async def receive_config_name(
         )
         return
 
-    await state.update_data(
-        config_name=name,
-    )
-
     panel = settings.PANELS.get(
         plan.panel_key
     )
@@ -132,44 +218,109 @@ async def receive_config_name(
         await state.clear()
 
         await message.answer(
-            "❌ پنل این پلن پیدا نشد."
+            "❌ سرور این پلن پیدا نشد."
         )
         return
 
-    plan_type = PLAN_TYPE_LABELS.get(
-        plan.plan_type,
-        plan.plan_type,
+    await state.update_data(
+        config_name=name,
     )
+
+    traffic = (
+        "نامحدود"
+        if plan.traffic_gb <= 0
+        else f"{plan.traffic_gb} گیگ"
+    )
+
+    plan_type = getattr(
+        plan.plan_type,
+        "value",
+        str(plan.plan_type),
+    )
+
+    plan_type_labels = {
+        "DIRECT": "⚡️ مستقیم",
+        "TUNNEL": "🚇 تانل",
+    }
 
     summary = texts.ORDER_SUMMARY.format(
         panel_name=panel.name,
-        plan_type=plan_type,
+        plan_type=plan_type_labels.get(
+            plan_type,
+            plan_type,
+        ),
         plan_name=plan.name,
         duration=plan.duration_days,
-        traffic=(
-            "نامحدود"
-            if plan.traffic_gb <= 0
-            else plan.traffic_gb
-        ),
+        traffic=traffic,
         amount=plan.price,
         currency=settings.CURRENCY_LABEL,
     )
 
     await message.answer(
-        summary + "\n\n" + texts.CHOOSE_PAYMENT,
-        reply_markup=payment_methods_kb(plan.id),
+        summary
+        + "\n\n"
+        + texts.CHOOSE_PAYMENT,
+        reply_markup=payment_methods_kb(
+            plan.id
+        ),
     )
 
 
 # ============================================================
-# دکمه لغو وارد کردن نام
+# اسم تصادفی
 # ============================================================
 
 @router.callback_query(
-    BuyFlow.waiting_config_name,
-    F.data == "buy_cancel",
+    F.data == "config_name_random"
 )
-async def cancel_config_name(
+async def random_config_name(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+
+    import secrets
+
+    random_name = (
+        f"VPN-"
+        f"{secrets.token_hex(4).upper()}"
+    )
+
+    await state.update_data(
+        config_name=random_name,
+    )
+
+    await callback.message.edit_text(
+        f"📱 نام کانفیگ:\n\n"
+        f"`{random_name}`\n\n"
+        f"💳 روش پرداخت را انتخاب کنید.",
+        reply_markup=None,
+        parse_mode="Markdown",
+    )
+
+    data = await state.get_data()
+    plan_id = data.get("plan_id")
+
+    if plan_id:
+        await callback.message.edit_reply_markup(
+            reply_markup=payment_methods_kb(
+                int(plan_id)
+            )
+        )
+
+    await callback.answer()
+
+
+# ============================================================
+# لغو خرید
+# ============================================================
+
+@router.callback_query(
+    F.data.in_({
+        "config_name_cancel",
+        "buy_cancel",
+    })
+)
+async def cancel_buy(
     callback: CallbackQuery,
     state: FSMContext,
 ) -> None:
@@ -179,5 +330,41 @@ async def cancel_config_name(
     await callback.message.edit_text(
         "❌ خرید لغو شد."
     )
+
+    await callback.answer()
+
+
+# ============================================================
+# بازگشت به پنل‌ها
+# ============================================================
+
+@router.callback_query(
+    F.data == "back_to_panels"
+)
+async def back_to_panels(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+
+    await state.clear()
+
+    await callback.message.edit_text(
+        "🌐 سرور مورد نظر خود را انتخاب کنید:",
+        reply_markup=panels_kb(),
+    )
+
+    await callback.answer()
+
+
+# ============================================================
+# دکمه‌های بدون عملکرد
+# ============================================================
+
+@router.callback_query(
+    F.data == "noop"
+)
+async def noop(
+    callback: CallbackQuery,
+) -> None:
 
     await callback.answer()
