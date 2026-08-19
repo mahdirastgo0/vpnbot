@@ -1,39 +1,42 @@
+from __future__ import annotations
+
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database.crud import (
-    create_order,
     get_order,
     list_pending_orders,
     mark_order_paid,
     mark_order_rejected,
 )
-from app.database.models import OrderStatus, PaymentMethod
+from app.database.models import OrderStatus
 from app.keyboards.admin_kb import order_review_kb
 from app.middlewares.admin_filter import IsAdmin
 from app.services.delivery import provision_and_deliver
 from app.services.sanaei_client import SanaeiApiError
 from app.utils import texts
-from app.services import zarinpal
-
-# اگر این توابع در فایل دیگری از پروژه هستند،
-# import مسیر صحیحشان را نگه می‌داریم.
-from app.keyboards.payment_kb import zarinpal_pay_kb
-from app.services.orders import _get_user_and_plan
 
 
 router = Router(name="admin_payments")
+
+# ==========================================================
+# فقط ادمین
+# ==========================================================
 
 router.message.filter(IsAdmin())
 router.callback_query.filter(IsAdmin())
 
 
 # ==========================================================
-# Pending Orders
+# سفارش‌های در انتظار
 # ==========================================================
 
 @router.message(Command("pending"))
@@ -45,7 +48,9 @@ async def pending_orders(
     orders = await list_pending_orders(session)
 
     if not orders:
-        await message.answer(texts.NO_PENDING_ORDERS)
+        await message.answer(
+            texts.NO_PENDING_ORDERS
+        )
         return
 
     for order in orders:
@@ -55,8 +60,10 @@ async def pending_orders(
             f"💳 پرداخت: {order.payment_method.value}\n"
             f"👤 کاربر: {order.user.telegram_id}\n"
             f"📦 پلن: {order.plan.name}\n"
-            f"💰 مبلغ: {order.amount:,} {settings.CURRENCY_LABEL}\n"
-            f"📱 نام کانفیگ: {order.config_name or 'کانفیگ من'}\n"
+            f"💰 مبلغ: {order.amount:,} "
+            f"{settings.CURRENCY_LABEL}\n"
+            f"📱 نام کانفیگ: "
+            f"{order.config_name or 'کانفیگ من'}\n"
         )
 
         if order.crypto_coin:
@@ -79,7 +86,7 @@ async def pending_orders(
 
 
 # ==========================================================
-# APPROVE ORDER
+# تایید سفارش
 # ==========================================================
 
 @router.callback_query(
@@ -101,7 +108,7 @@ async def approve_order(
     )
 
     # ------------------------------------------------------
-    # بررسی سفارش
+    # سفارش وجود ندارد
     # ------------------------------------------------------
 
     if order is None:
@@ -112,6 +119,10 @@ async def approve_order(
         )
 
         return
+
+    # ------------------------------------------------------
+    # سفارش قبلاً بررسی شده
+    # ------------------------------------------------------
 
     if order.status != OrderStatus.PENDING:
 
@@ -137,11 +148,11 @@ async def approve_order(
     except SanaeiApiError as e:
 
         await callback.message.answer(
-            f"⚠️ پرداخت هنوز نهایی نشد.\n"
-            f"ساخت کانفیگ روی پنل خطا داد:\n\n"
+            f"⚠️ پرداخت هنوز نهایی نشد.\n\n"
+            f"❌ خطا در ساخت کانفیگ روی پنل:\n"
             f"{e}\n\n"
-            f"سفارش #{order.id} همچنان در انتظار است "
-            f"و می‌توانی دوباره تلاش کنی."
+            f"سفارش #{order.id} همچنان "
+            f"در وضعیت انتظار است."
         )
 
         await callback.answer(
@@ -154,10 +165,10 @@ async def approve_order(
     except Exception as e:
 
         await callback.message.answer(
-            f"⚠️ ساخت کانفیگ برای سفارش #{order.id} "
-            f"با خطای غیرمنتظره مواجه شد.\n\n"
+            f"⚠️ خطای غیرمنتظره در ساخت "
+            f"کانفیگ سفارش #{order.id}\n\n"
             f"{e}\n\n"
-            f"سفارش همچنان در وضعیت انتظار باقی ماند."
+            f"سفارش همچنان در انتظار است."
         )
 
         await callback.answer(
@@ -168,8 +179,7 @@ async def approve_order(
         return
 
     # ------------------------------------------------------
-    # کانفیگ ساخته شد
-    # سفارش را PAID می‌کنیم
+    # کانفیگ با موفقیت ساخته شده
     # ------------------------------------------------------
 
     await mark_order_paid(
@@ -178,7 +188,9 @@ async def approve_order(
         admin_id=callback.from_user.id,
     )
 
-    # حذف دکمه‌ها
+    # ------------------------------------------------------
+    # حذف دکمه‌های سفارش
+    # ------------------------------------------------------
 
     try:
 
@@ -189,10 +201,14 @@ async def approve_order(
     except Exception:
         pass
 
+    # ------------------------------------------------------
+    # پیام به ادمین
+    # ------------------------------------------------------
+
     await callback.message.answer(
-        f"✅ سفارش #{order.id} تایید شد.\n"
-        f"🔐 کانفیگ با موفقیت ساخته و "
-        f"برای کاربر ارسال شد."
+        f"✅ سفارش #{order.id} تایید شد.\n\n"
+        f"🔐 کانفیگ با موفقیت ساخته شد "
+        f"و برای کاربر ارسال شد."
     )
 
     await callback.answer(
@@ -201,7 +217,7 @@ async def approve_order(
 
 
 # ==========================================================
-# REJECT ORDER
+# رد سفارش
 # ==========================================================
 
 @router.callback_query(
@@ -222,6 +238,10 @@ async def reject_order(
         order_id,
     )
 
+    # ------------------------------------------------------
+    # سفارش وجود ندارد
+    # ------------------------------------------------------
+
     if order is None:
 
         await callback.answer(
@@ -230,6 +250,10 @@ async def reject_order(
         )
 
         return
+
+    # ------------------------------------------------------
+    # سفارش قبلاً بررسی شده
+    # ------------------------------------------------------
 
     if order.status != OrderStatus.PENDING:
 
@@ -240,11 +264,19 @@ async def reject_order(
 
         return
 
+    # ------------------------------------------------------
+    # رد سفارش
+    # ------------------------------------------------------
+
     await mark_order_rejected(
         session,
         order,
         admin_id=callback.from_user.id,
     )
+
+    # ------------------------------------------------------
+    # اطلاع به کاربر
+    # ------------------------------------------------------
 
     await bot.send_message(
         order.user.telegram_id,
@@ -253,6 +285,10 @@ async def reject_order(
             support=settings.SUPPORT_USERNAME,
         ),
     )
+
+    # ------------------------------------------------------
+    # حذف دکمه‌ها
+    # ------------------------------------------------------
 
     try:
 
@@ -263,6 +299,10 @@ async def reject_order(
     except Exception:
         pass
 
+    # ------------------------------------------------------
+    # پیام به ادمین
+    # ------------------------------------------------------
+
     await callback.message.answer(
         f"❌ سفارش #{order.id} رد شد."
     )
@@ -270,88 +310,3 @@ async def reject_order(
     await callback.answer(
         "سفارش رد شد."
     )
-
-
-# ==========================================================
-# ZARINPAL
-# ==========================================================
-
-@router.callback_query(
-    F.data.startswith("pay:zarinpal:")
-)
-async def pay_zarinpal(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
-) -> None:
-
-    plan_id = int(
-        callback.data.split(":")[2]
-    )
-
-    data = await state.get_data()
-
-    config_name = data.get(
-        "config_name"
-    )
-
-    user, plan = await _get_user_and_plan(
-        session,
-        callback,
-        plan_id,
-    )
-
-    if plan is None:
-
-        await callback.answer(
-            "پلن یافت نشد.",
-            show_alert=True,
-        )
-
-        return
-
-    order = await create_order(
-        session,
-        user,
-        plan,
-        PaymentMethod.ZARINPAL,
-        config_name=config_name,
-    )
-
-    await state.clear()
-
-    try:
-
-        authority, pay_link = (
-            await zarinpal.request_payment(
-                amount_toman=plan.price,
-                description=(
-                    f"خرید پلن {plan.name} "
-                    f"- سفارش #{order.id}"
-                ),
-                order_id=order.id,
-            )
-        )
-
-    except zarinpal.ZarinpalError as e:
-
-        await callback.message.answer(
-            f"⚠️ خطا در اتصال به زرین‌پال: {e}"
-        )
-
-        await callback.answer()
-
-        return
-
-    order.zarinpal_authority = authority
-
-    await session.commit()
-
-    await callback.message.answer(
-        texts.ZARINPAL_LINK,
-        reply_markup=zarinpal_pay_kb(
-            pay_link
-        ),
-    )
-
-    await callback.answer()
