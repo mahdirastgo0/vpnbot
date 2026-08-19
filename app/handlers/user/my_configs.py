@@ -9,12 +9,11 @@ from app.keyboards.inline import config_list_keyboard, back_to_menu_keyboard
 from app.utils import texts
 from app.utils.callback_data import ConfigListCallback
 
-router = Router()  # <-- حتماً این خط را داشته باشید
+router = Router()
 
 
-@router.message(Command("my_configs"))
-async def my_configs_command(message: types.Message, user: User, session: AsyncSession):
-    """نمایش لیست کانفیگ‌های فعال کاربر"""
+# ---------- نمایش لیست کانفیگ‌ها (مشترک بین دستور و دکمه) ----------
+async def show_configs_list(message: types.Message, user: User, session: AsyncSession):
     stmt = (
         select(VpnConfig)
         .where(VpnConfig.user_id == user.id)
@@ -38,6 +37,20 @@ async def my_configs_command(message: types.Message, user: User, session: AsyncS
     )
 
 
+# ---------- هندلر دستور /my_configs ----------
+@router.message(Command("my_configs"))
+async def my_configs_command(message: types.Message, user: User, session: AsyncSession):
+    await show_configs_list(message, user, session)
+
+
+# ---------- هندلر دکمه «کانفیگ‌های من» از منوی اصلی ----------
+@router.callback_query(F.data == "my_configs")
+async def my_configs_callback(callback: CallbackQuery, user: User, session: AsyncSession):
+    await callback.answer()  # پاسخ به تلگراف
+    await show_configs_list(callback.message, user, session)
+
+
+# ---------- نمایش جزئیات یک کانفیگ خاص ----------
 @router.callback_query(ConfigListCallback.filter())
 async def show_config(
     callback: CallbackQuery,
@@ -45,7 +58,6 @@ async def show_config(
     session: AsyncSession,
     user: User,
 ):
-    """نمایش جزییات یک کانفیگ مشخص"""
     vpn_config = await session.get(VpnConfig, callback_data.config_id)
     if not vpn_config:
         await callback.answer("کانفیگ یافت نشد.", show_alert=True)
@@ -55,21 +67,17 @@ async def show_config(
         await callback.answer("شما به این کانفیگ دسترسی ندارید.", show_alert=True)
         return
 
-    # ---------- ساخت متن ----------
     traffic_text = "نامحدود" if vpn_config.traffic_gb <= 0 else f"{vpn_config.traffic_gb} GB"
     expire_text = vpn_config.expire_at.strftime("%Y-%m-%d %H:%M") if vpn_config.expire_at else "نامحدود"
 
-    # استفاده از config_name (که در VpnConfig وجود دارد)
     caption = texts.CONFIG_QR_CAPTION.format(
-        config_name=vpn_config.config_name,          # <-- کلید صحیح
+        config_name=vpn_config.config_name,
         plan_name=vpn_config.plan_name,
         traffic_gb=traffic_text,
         expire_at=expire_text,
         subscription_link=vpn_config.subscription_link or "ندارد",
-        # در صورت نیاز فیلدهای دیگر
     )
 
-    # ---------- ارسال QR ----------
     if vpn_config.subscription_link:
         try:
             import qrcode
@@ -90,7 +98,6 @@ async def show_config(
                 reply_markup=back_to_menu_keyboard(),
             )
         except ImportError:
-            # اگر qrcode نصب نیست، فقط لینک را نمایش بده
             await callback.message.edit_text(
                 caption,
                 reply_markup=back_to_menu_keyboard(),
