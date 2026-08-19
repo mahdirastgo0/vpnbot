@@ -43,7 +43,17 @@ async def my_configs_command(message: types.Message, user: User, session: AsyncS
     await show_configs_list(message, user, session)
 
 
-# ---------- هندلر دکمه «کانفیگ‌های من» از منوی اصلی ----------
+# ---------- هندلر دکمه «📂 کانفیگ‌های من» از منوی اصلی (Reply Keyboard) ----------
+# نکته: این دکمه یک متن معمولی می‌فرسته (نه CallbackQuery)، برای همین باید
+# با message/F.text گرفته بشه. این همون هندلری بود که کم بود و باعث
+# «Update is not handled» می‌شد. اگر متن دقیق دکمه‌تون توی
+# app/keyboards/user_kb.py چیز دیگه‌ایه، همین رشته رو با اون یکی بدید.
+@router.message(F.text == "📂 کانفیگ‌های من")
+async def my_configs_button(message: types.Message, user: User, session: AsyncSession):
+    await show_configs_list(message, user, session)
+
+
+# ---------- هندلر دکمه «کانفیگ‌های من» به‌صورت اینلاین (در صورت استفاده جای دیگه) ----------
 @router.callback_query(F.data == "my_configs")
 async def my_configs_callback(callback: CallbackQuery, user: User, session: AsyncSession):
     await callback.answer()
@@ -54,14 +64,21 @@ async def my_configs_callback(callback: CallbackQuery, user: User, session: Asyn
 @router.callback_query(F.data == "back_to_menu")
 async def back_to_menu_callback(callback: CallbackQuery):
     await callback.answer()
-    from app.keyboards.main_menu import main_menu_keyboard  # فرض بر این است که این تابع وجود دارد
-    await callback.message.edit_text(
+    # اصلاح شد: مسیر و اسم درست تابع منو (طبق app/handlers/user/start.py)
+    from app.keyboards.user_kb import main_menu_kb
+
+    # منوی اصلی یک ReplyKeyboardMarkup هست، پس با edit_text قابل نمایش نیست
+    # (edit_text فقط InlineKeyboardMarkup قبول می‌کنه). به همین خاطر پیام
+    # قبلی رو حذف/پاک می‌کنیم و یک پیام جدید با کیبورد اصلی می‌فرستیم.
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    await callback.message.answer(
         "🏠 منوی اصلی",
-        reply_markup=main_menu_keyboard(),
+        reply_markup=main_menu_kb(),
     )
-    # اگر ویرایش ممکن نیست، پیام جدید بفرستید
-    # await callback.message.delete()
-    # await callback.message.answer("🏠 منوی اصلی", reply_markup=main_menu_keyboard())
 
 
 # ---------- نمایش جزئیات یک کانفیگ خاص ----------
