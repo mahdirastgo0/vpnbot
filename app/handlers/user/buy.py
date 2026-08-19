@@ -1,26 +1,14 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database.crud import (
-    create_order,
-    get_or_create_user,
-    get_plan,
-)
-from app.database.models import PaymentMethod
-from app.keyboards.payment_kb import (
-    payment_methods_kb,
-    zarinpal_pay_kb,
-)
+from app.database.crud import get_plan
+from app.keyboards.payment_kb import payment_methods_kb
 from app.keyboards.user_kb import config_name_kb
-from app.services.zarinpal import (
-    ZarinpalError,
-    request_payment,
-)
 from app.states.buy import BuyFlow
 from app.utils import texts
 
@@ -29,28 +17,32 @@ router = Router(name="user_buy")
 
 
 PLAN_TYPE_LABELS = {
-    "DIRECT": "🌍 مستقیم",
-    "TUNNEL": "🇮🇷 تانل",
+    "DIRECT": "مستقیم",
+    "TUNNEL": "تانل",
 }
 
 
-# ==========================================================
+# ============================================================
 # انتخاب پلن
-# ==========================================================
+# ============================================================
 
-@router.callback_query(F.data.startswith("buy_plan:"))
-async def choose_plan(
+@router.callback_query(F.data.startswith("buy:"))
+async def select_plan(
     callback: CallbackQuery,
     session: AsyncSession,
     state: FSMContext,
 ) -> None:
 
-    plan_id = int(callback.data.split(":", 1)[1])
+    try:
+        plan_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer(
+            "پلن نامعتبر است.",
+            show_alert=True,
+        )
+        return
 
-    plan = await get_plan(
-        session,
-        plan_id,
-    )
+    plan = await get_plan(session, plan_id)
 
     if plan is None or not plan.is_active:
         await callback.answer(
@@ -75,9 +67,9 @@ async def choose_plan(
     await callback.answer()
 
 
-# ==========================================================
+# ============================================================
 # دریافت نام کانفیگ
-# ==========================================================
+# ============================================================
 
 @router.message(
     BuyFlow.waiting_config_name,
@@ -104,7 +96,6 @@ async def receive_config_name(
         return
 
     data = await state.get_data()
-
     plan_id = data.get("plan_id")
 
     if not plan_id:
@@ -112,7 +103,7 @@ async def receive_config_name(
 
         await message.answer(
             "❌ سفارش پیدا نشد.\n"
-            "دوباره از خرید سرویس شروع کن."
+            "لطفاً دوباره از خرید سرویس شروع کن."
         )
         return
 
@@ -141,7 +132,7 @@ async def receive_config_name(
         await state.clear()
 
         await message.answer(
-            "❌ پنل مربوط به این پلن پیدا نشد."
+            "❌ پنل این پلن پیدا نشد."
         )
         return
 
@@ -150,145 +141,35 @@ async def receive_config_name(
         plan.plan_type,
     )
 
-    traffic = (
-        "نامحدود"
-        if plan.traffic_gb <= 0
-        else f"{plan.traffic_gb} GB"
-    )
-
     summary = texts.ORDER_SUMMARY.format(
         panel_name=panel.name,
         plan_type=plan_type,
         plan_name=plan.name,
         duration=plan.duration_days,
-        traffic=traffic,
+        traffic=(
+            "نامحدود"
+            if plan.traffic_gb <= 0
+            else plan.traffic_gb
+        ),
         amount=plan.price,
         currency=settings.CURRENCY_LABEL,
-    )
-
-    await state.set_state(
-        BuyFlow.waiting_payment_method
     )
 
     await message.answer(
-        summary
-        + "\n\n"
-        + f"📱 نام کانفیگ: {name}"
-        + "\n\n"
-        + texts.CHOOSE_PAYMENT,
-        reply_markup=payment_methods_kb(
-            plan.id
-        ),
+        summary + "\n\n" + texts.CHOOSE_PAYMENT,
+        reply_markup=payment_methods_kb(plan.id),
     )
 
 
-# ==========================================================
-# نام پیش‌فرض کانفیگ
-# ==========================================================
+# ============================================================
+# دکمه لغو وارد کردن نام
+# ============================================================
 
 @router.callback_query(
     BuyFlow.waiting_config_name,
-    F.data == "config_name:default",
-)
-async def use_default_config_name(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
-) -> None:
-
-    data = await state.get_data()
-
-    plan_id = data.get("plan_id")
-
-    if not plan_id:
-        await state.clear()
-
-        await callback.answer(
-            "سفارش پیدا نشد.",
-            show_alert=True,
-        )
-        return
-
-    plan = await get_plan(
-        session,
-        int(plan_id),
-    )
-
-    if plan is None or not plan.is_active:
-        await state.clear()
-
-        await callback.answer(
-            "این پلن دیگر موجود نیست.",
-            show_alert=True,
-        )
-        return
-
-    config_name = "کانفیگ من"
-
-    await state.update_data(
-        config_name=config_name,
-    )
-
-    panel = settings.PANELS.get(
-        plan.panel_key
-    )
-
-    if panel is None:
-        await state.clear()
-
-        await callback.answer(
-            "پنل مربوط به این پلن پیدا نشد.",
-            show_alert=True,
-        )
-        return
-
-    plan_type = PLAN_TYPE_LABELS.get(
-        plan.plan_type,
-        plan.plan_type,
-    )
-
-    traffic = (
-        "نامحدود"
-        if plan.traffic_gb <= 0
-        else f"{plan.traffic_gb} GB"
-    )
-
-    summary = texts.ORDER_SUMMARY.format(
-        panel_name=panel.name,
-        plan_type=plan_type,
-        plan_name=plan.name,
-        duration=plan.duration_days,
-        traffic=traffic,
-        amount=plan.price,
-        currency=settings.CURRENCY_LABEL,
-    )
-
-    await state.set_state(
-        BuyFlow.waiting_payment_method
-    )
-
-    await callback.message.edit_text(
-        summary
-        + "\n\n"
-        + f"📱 نام کانفیگ: {config_name}"
-        + "\n\n"
-        + texts.CHOOSE_PAYMENT,
-        reply_markup=payment_methods_kb(
-            plan.id
-        ),
-    )
-
-    await callback.answer()
-
-
-# ==========================================================
-# لغو خرید
-# ==========================================================
-
-@router.callback_query(
     F.data == "buy_cancel",
 )
-async def cancel_buy(
+async def cancel_config_name(
     callback: CallbackQuery,
     state: FSMContext,
 ) -> None:
@@ -297,257 +178,6 @@ async def cancel_buy(
 
     await callback.message.edit_text(
         "❌ خرید لغو شد."
-    )
-
-    await callback.answer()
-
-
-# ==========================================================
-# زرین پال
-# ==========================================================
-
-@router.callback_query(
-    BuyFlow.waiting_payment_method,
-    F.data.startswith("pay:zarinpal:"),
-)
-async def pay_zarinpal(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
-) -> None:
-
-    plan_id = int(
-        callback.data.split(":")[2]
-    )
-
-    data = await state.get_data()
-
-    config_name = data.get(
-        "config_name",
-        "کانفیگ من",
-    )
-
-    plan = await get_plan(
-        session,
-        plan_id,
-    )
-
-    if plan is None or not plan.is_active:
-        await callback.answer(
-            "پلن یافت نشد.",
-            show_alert=True,
-        )
-        return
-
-    user = await get_or_create_user(
-        session,
-        telegram_id=callback.from_user.id,
-    )
-
-    order = await create_order(
-        session,
-        user,
-        plan,
-        PaymentMethod.ZARINPAL,
-        config_name=config_name,
-    )
-
-    try:
-
-        authority, pay_link = await request_payment(
-            amount_toman=plan.price,
-            description=(
-                f"خرید پلن {plan.name} "
-                f"- سفارش #{order.id}"
-            ),
-            order_id=order.id,
-        )
-
-    except ZarinpalError as e:
-
-        await callback.message.answer(
-            "⚠️ خطا در اتصال به زرین‌پال:\n\n"
-            f"{e}"
-        )
-
-        await callback.answer()
-        return
-
-    order.zarinpal_authority = authority
-
-    await session.commit()
-
-    await state.clear()
-
-    await callback.message.edit_text(
-        texts.ZARINPAL_LINK,
-        reply_markup=zarinpal_pay_kb(
-            pay_link
-        ),
-    )
-
-    await callback.answer()
-
-
-# ==========================================================
-# کارت به کارت
-# ==========================================================
-
-@router.callback_query(
-    BuyFlow.waiting_payment_method,
-    F.data.startswith("pay:card:"),
-)
-async def pay_card(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
-) -> None:
-
-    plan_id = int(
-        callback.data.split(":")[2]
-    )
-
-    data = await state.get_data()
-
-    config_name = data.get(
-        "config_name",
-        "کانفیگ من",
-    )
-
-    plan = await get_plan(
-        session,
-        plan_id,
-    )
-
-    if plan is None or not plan.is_active:
-        await callback.answer(
-            "پلن یافت نشد.",
-            show_alert=True,
-        )
-        return
-
-    user = await get_or_create_user(
-        session,
-        telegram_id=callback.from_user.id,
-    )
-
-    order = await create_order(
-        session,
-        user,
-        plan,
-        PaymentMethod.CARD,
-        config_name=config_name,
-    )
-
-    await session.commit()
-
-    await state.clear()
-
-    text = (
-        "💳 <b>پرداخت کارت به کارت</b>\n\n"
-        f"🧾 سفارش: #{order.id}\n"
-        f"📦 پلن: {plan.name}\n"
-        f"📱 نام کانفیگ: {config_name}\n"
-        f"💰 مبلغ: {plan.price:,} "
-        f"{settings.CURRENCY_LABEL}\n\n"
-        f"🏦 بانک: {settings.CARD_BANK_NAME}\n"
-        f"👤 صاحب حساب: {settings.CARD_HOLDER_NAME}\n"
-        f"💳 شماره کارت:\n"
-        f"<code>{settings.CARD_NUMBER}</code>\n\n"
-        "پس از انتقال وجه، رسید پرداخت را ارسال کنید."
-    )
-
-    await callback.message.edit_text(
-        text,
-        parse_mode="HTML",
-    )
-
-    await callback.answer()
-
-
-# ==========================================================
-# کریپتو
-# ==========================================================
-
-@router.callback_query(
-    BuyFlow.waiting_payment_method,
-    F.data.startswith("pay:crypto:"),
-)
-async def pay_crypto(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
-) -> None:
-
-    plan_id = int(
-        callback.data.split(":")[2]
-    )
-
-    data = await state.get_data()
-
-    config_name = data.get(
-        "config_name",
-        "کانفیگ من",
-    )
-
-    plan = await get_plan(
-        session,
-        plan_id,
-    )
-
-    if plan is None or not plan.is_active:
-        await callback.answer(
-            "پلن یافت نشد.",
-            show_alert=True,
-        )
-        return
-
-    user = await get_or_create_user(
-        session,
-        telegram_id=callback.from_user.id,
-    )
-
-    order = await create_order(
-        session,
-        user,
-        plan,
-        PaymentMethod.CRYPTO,
-        config_name=config_name,
-    )
-
-    await session.commit()
-
-    await state.clear()
-
-    wallets = settings.CRYPTO_WALLETS.active_wallets()
-
-    if not wallets:
-        await callback.message.edit_text(
-            "❌ در حال حاضر پرداخت ارز دیجیتال فعال نیست."
-        )
-        await callback.answer()
-        return
-
-    wallet_text = "\n".join(
-        f"• {coin.upper()}: <code>{address}</code>"
-        for coin, address in wallets.items()
-    )
-
-    text = (
-        "🪙 <b>پرداخت ارز دیجیتال</b>\n\n"
-        f"🧾 سفارش: #{order.id}\n"
-        f"📦 پلن: {plan.name}\n"
-        f"📱 نام کانفیگ: {config_name}\n"
-        f"💰 مبلغ معادل: {plan.price:,} "
-        f"{settings.CURRENCY_LABEL}\n\n"
-        "آدرس‌های پرداخت:\n"
-        f"{wallet_text}\n\n"
-        "بعد از پرداخت، اطلاعات تراکنش را ارسال کنید."
-    )
-
-    await callback.message.edit_text(
-        text,
-        parse_mode="HTML",
     )
 
     await callback.answer()
