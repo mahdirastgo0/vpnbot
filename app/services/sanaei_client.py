@@ -44,7 +44,6 @@ class SanaeiClient:
     ) -> dict:
 
         try:
-
             response = await self._client.request(
                 method,
                 path,
@@ -52,13 +51,11 @@ class SanaeiClient:
             )
 
         except httpx.RequestError as e:
-
             raise SanaeiApiError(
                 f"ارتباط با پنل «{self.panel.name}» برقرار نشد:\n{e}"
             ) from e
 
         if response.status_code == 404:
-
             raise SanaeiApiError(
                 f"Endpoint پنل پیدا نشد.\n"
                 f"URL: {response.request.url}\n"
@@ -66,14 +63,12 @@ class SanaeiClient:
             )
 
         if response.status_code in (401, 403):
-
             raise SanaeiApiError(
                 f"احراز هویت پنل «{self.panel.name}» ناموفق بود.\n"
                 f"HTTP: {response.status_code}"
             )
 
         if response.status_code >= 400:
-
             raise SanaeiApiError(
                 f"خطای HTTP از پنل «{self.panel.name}»:\n"
                 f"HTTP: {response.status_code}\n"
@@ -82,16 +77,13 @@ class SanaeiClient:
 
         try:
             data = response.json()
-
         except Exception:
-
             raise SanaeiApiError(
                 f"پاسخ JSON نامعتبر از پنل «{self.panel.name}»:\n"
                 f"{response.text[:1000]}"
             )
 
         if isinstance(data, dict) and data.get("success") is False:
-
             raise SanaeiApiError(
                 f"خطای پنل «{self.panel.name}»: "
                 f"{data.get('msg') or data.get('message') or data}"
@@ -112,10 +104,7 @@ class SanaeiClient:
 
         obj = data.get("obj", [])
 
-        if not isinstance(obj, list):
-            return []
-
-        return obj
+        return obj if isinstance(obj, list) else []
 
     async def get_inbound(
         self,
@@ -125,12 +114,9 @@ class SanaeiClient:
         inbounds = await self.list_inbounds()
 
         for inbound in inbounds:
-
             try:
-
                 if int(inbound.get("id")) == int(inbound_id):
                     return inbound
-
             except Exception:
                 continue
 
@@ -141,6 +127,21 @@ class SanaeiClient:
 
     # ==========================================================
     # ADD CLIENT
+    #
+    # Endpoint:
+    # POST /panel/api/clients/add
+    #
+    # ساختار API:
+    #
+    # {
+    #   "inbounds": [2],
+    #   "client": {
+    #       "email": "...",
+    #       ...
+    #   }
+    # }
+    #
+    # email = نام کانفیگ انتخاب‌شده توسط کاربر
     # ==========================================================
 
     async def add_client(
@@ -159,13 +160,24 @@ class SanaeiClient:
         )
 
         # ------------------------------------------------------
+        # نام کانفیگ
+        # ------------------------------------------------------
+
+        email = str(email).strip()
+
+        if not email:
+            raise SanaeiApiError(
+                "نام کانفیگ خالی است."
+            )
+
+        # ------------------------------------------------------
         # UUID
         # ------------------------------------------------------
 
         client_uuid = str(uuid.uuid4())
 
         # ------------------------------------------------------
-        # Expiration
+        # Expiry
         # ------------------------------------------------------
 
         expire_ms = int(
@@ -206,7 +218,7 @@ class SanaeiClient:
         client = {
             "id": client_uuid,
             "flow": "",
-            "email": str(email),
+            "email": email,
             "limitIp": 0,
             "totalGB": total_bytes,
             "expiryTime": expire_ms,
@@ -216,24 +228,18 @@ class SanaeiClient:
         }
 
         # ------------------------------------------------------
-        # IMPORTANT
+        # Payload
         #
-        # API جدید پنل:
-        #
-        # /panel/api/clients/add
-        #
-        # حداقل یک inbound لازم دارد.
-        #
-        # بنابراین inbound داخل آرایه inbounds ارسال می‌شود.
+        # توجه:
+        # inbounds باید آرایه‌ای از ID باشد.
+        # client جداگانه ارسال می‌شود.
         # ------------------------------------------------------
 
         payload = {
             "inbounds": [
-                {
-                    "id": inbound_id,
-                    "client": client,
-                }
-            ]
+                inbound_id
+            ],
+            "client": client,
         }
 
         print()
@@ -245,11 +251,15 @@ class SanaeiClient:
         print("EMAIL       :", email)
         print("UUID        :", client_uuid)
         print("TRAFFIC GB  :", traffic_gb)
-        print("TRAFFIC BYTES:", total_bytes)
+        print("TRAFFIC BYTE:", total_bytes)
         print("EXPIRY MS   :", expire_ms)
         print("TG ID       :", tg_id)
         print("==========================================")
         print()
+
+        # ------------------------------------------------------
+        # Create
+        # ------------------------------------------------------
 
         data = await self._request(
             "POST",
@@ -275,7 +285,7 @@ class SanaeiClient:
         }
 
     # ==========================================================
-    # CLIENT TRAFFIC
+    # TRAFFIC
     # ==========================================================
 
     async def get_client_traffic(
@@ -291,7 +301,7 @@ class SanaeiClient:
         return data.get("obj")
 
     # ==========================================================
-    # DELETE CLIENT
+    # DELETE
     # ==========================================================
 
     async def delete_client(
@@ -310,12 +320,11 @@ class SanaeiClient:
     # ==========================================================
 
     async def close(self) -> None:
-
         await self._client.aclose()
 
 
 # ==============================================================
-# BUILD CONFIG
+# BUILD CONFIG LINK
 # ==============================================================
 
 def build_config_link(
@@ -331,16 +340,13 @@ def build_config_link(
     )
 
     try:
-
         if isinstance(raw_stream, str):
             stream_settings = json.loads(
                 raw_stream or "{}"
             )
         else:
             stream_settings = raw_stream or {}
-
     except Exception:
-
         stream_settings = {}
 
     network = stream_settings.get(
@@ -353,10 +359,6 @@ def build_config_link(
         "none",
     )
 
-    # ----------------------------------------------------------
-    # Host
-    # ----------------------------------------------------------
-
     host = (
         panel.url
         .split("://")[-1]
@@ -367,7 +369,6 @@ def build_config_link(
     port = inbound.get("port")
 
     if not port:
-
         raise SanaeiApiError(
             "پورت اینباند از پنل دریافت نشد."
         )
@@ -383,10 +384,6 @@ def build_config_link(
             f"security={quote(str(security))}",
         ]
 
-        # ------------------------------------------------------
-        # TLS
-        # ------------------------------------------------------
-
         if security == "tls":
 
             tls = (
@@ -399,21 +396,11 @@ def build_config_link(
 
             server_name = tls.get(
                 "serverName"
-            )
+            ) or host
 
             params.append(
-                "sni="
-                + quote(
-                    str(
-                        server_name
-                        or host
-                    )
-                )
+                "sni=" + quote(str(server_name))
             )
-
-        # ------------------------------------------------------
-        # WS
-        # ------------------------------------------------------
 
         if network == "ws":
 
@@ -449,17 +436,10 @@ def build_config_link(
             ws_host = headers.get("Host")
 
             if ws_host:
-
                 params.append(
                     "host="
-                    + quote(
-                        str(ws_host)
-                    )
+                    + quote(str(ws_host))
                 )
-
-        # ------------------------------------------------------
-        # Reality
-        # ------------------------------------------------------
 
         if security == "reality":
 
@@ -511,23 +491,17 @@ def build_config_link(
             )
 
             if public_key:
-
                 params.append(
                     "pbk="
-                    + quote(
-                        str(public_key)
-                    )
+                    + quote(str(public_key))
                 )
 
             params.append(
                 "fp="
-                + quote(
-                    str(fingerprint)
-                )
+                + quote(str(fingerprint))
             )
 
             if server_names:
-
                 params.append(
                     "sni="
                     + quote(
@@ -536,7 +510,6 @@ def build_config_link(
                 )
 
             if short_ids:
-
                 params.append(
                     "sid="
                     + quote(
@@ -545,7 +518,6 @@ def build_config_link(
                 )
 
             if spider_x:
-
                 params.append(
                     "spx="
                     + quote(
