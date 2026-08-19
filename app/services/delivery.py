@@ -1,16 +1,15 @@
-import uuid
+from __future__ import annotations
 
 from aiogram import Bot
-from aiogram.types import BufferedInputFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database.crud import get_vpn_config_by_order, save_vpn_config
 from app.database.models import Order
-from app.services.panel_manager import get_client
-from app.services.sanaei_client import build_config_link
-from app.utils import texts
-from app.utils.qrcode_gen import generate_qr_bytes
+from app.services.sanaei_client import (
+    SanaeiApiError,
+    SanaeiClient,
+    build_config_link,
+)
 
 
 async def provision_and_deliver(
@@ -18,118 +17,109 @@ async def provision_and_deliver(
     session: AsyncSession,
     order: Order,
 ) -> None:
-    """
-    برای یک سفارش فقط یک کانفیگ ایجاد می‌کند.
 
-    اگر کانفیگ قبلاً برای سفارش ساخته شده باشد،
-    دوباره روی پنل client جدید ایجاد نمی‌کند و همان کانفیگ
-    قبلی را برای کاربر ارسال می‌کند.
-    """
-
-    # --------------------------------------------------
-    # جلوگیری از ساخت کانفیگ تکراری
-    # --------------------------------------------------
-    existing = await get_vpn_config_by_order(
-        session,
-        order.id,
-    )
-
-    if existing is not None:
-        qr = generate_qr_bytes(existing.config_link)
-
-        await bot.send_photo(
-            chat_id=order.user.telegram_id,
-            photo=BufferedInputFile(
-                qr.read(),
-                filename="config.png",
-            ),
-            caption=(
-                f"{texts.ORDER_APPROVED_USER}\n\n"
-                f"`{existing.config_link}`"
-            ),
-            parse_mode="Markdown",
-        )
-        return
-
-    # --------------------------------------------------
-    # اطلاعات پلن
-    # --------------------------------------------------
     plan = order.plan
 
-    if plan.panel_key not in settings.PANELS:
-        raise RuntimeError(
-            f"پنل «{plan.panel_key}» برای پلن "
-            f"«{plan.name}» تعریف نشده است."
+    if plan is None:
+        raise SanaeiApiError(
+            "پلن سفارش پیدا نشد."
         )
 
-    panel_cfg = settings.PANELS[plan.panel_key]
-    client = get_client(plan.panel_key)
-
-    # --------------------------------------------------
-    # ساخت نام یکتا برای Client
-    # --------------------------------------------------
-    email = (
-        f"tg{order.user.telegram_id}-"
-        f"{uuid.uuid4().hex[:6]}"
+    panel = settings.PANELS.get(
+        plan.panel_key
     )
 
-    # --------------------------------------------------
-    # ساخت Client روی پنل
-    # --------------------------------------------------
-    result = await client.add_client(
-        email=email,
-        traffic_gb=plan.traffic_gb,
-        duration_days=plan.duration_days,
-        inbound_id=panel_cfg.inbound_id,
-    )
+    if panel is None:
+        raise SanaeiApiError(
+            f"پنل «{plan.panel_key}» پیدا نشد."
+        )
 
-    client_uuid = result["client_uuid"]
+    # ==========================================================
+    # ساخت کلاینت API
+    # ==========================================================
 
-    config_link = build_config_link(
-        panel_cfg,
-        result["inbound"],
-        client_uuid,
-        email,
-    )
+    client = SanaeiClient(panel)
 
-    # --------------------------------------------------
-    # ذخیره در دیتابیس
-    # --------------------------------------------------
-    cfg = await save_vpn_config(
-            session,
-            order=order,
-            panel_key=plan.panel_key,
-            inbound_id=panel_cfg.inbound_id,
-            client_email=email,
-            client_uuid=result["client_uuid"],
-            config_link=config_link,
+    try:
+
+        email = (
+            order.config_name
+            or f"user-{order.user.telegram_id}-{order.id}"
+        )
+
+        # ======================================================
+        # ساخت کانفیگ
+        # ======================================================
+
+        result = await client.add_client(
+            email=email,
             traffic_gb=plan.traffic_gb,
             duration_days=plan.duration_days,
-            plan_type=plan.plan_type,
-            plan_name=plan.name,
-            config_name=order.config_name or "کانفیگ من",
+            inbound_id=panel.inbound_id,
         )
 
-    # جلوگیری از warning مربوط به متغیر استفاده‌نشده
-    _ = cfg
+        client_uuid = result["client_uuid"]
+        inbound = result["inbound"]
 
-    # --------------------------------------------------
-    # ساخت QR
-    # --------------------------------------------------
-    qr = generate_qr_bytes(config_link)
+        # ======================================================
+        # ساخت لینک
+        # ======================================================
 
-    # --------------------------------------------------
-    # ارسال به کاربر
-    # --------------------------------------------------
-    await bot.send_photo(
-        chat_id=order.user.telegram_id,
-        photo=BufferedInputFile(
-            qr.read(),
-            filename="config.png",
-        ),
-        caption=(
-            f"{texts.ORDER_APPROVED_USER}\n\n"
-            f"`{config_link}`"
-        ),
-        parse_mode="Markdown",
-    )
+        config_link = build_config_link(
+            panel=panel,
+            inbound=inbound,
+            client_uuid=client_uuid,
+            email=email,
+        )
+
+        # ======================================================
+        # ذخیره اطلاعات سفارش
+        # ======================================================
+
+        if hasattr(order, "client_uuid"):
+            order.client_uuid = client_uuid
+
+        if hasattr(order, "config_link"):
+            order.config_link = config_link
+
+        if hasattr(order, "config_name"):
+            order.config_name = email
+
+        if hasattr(order, "panel_key"):
+            order.panel_key = panel.key
+
+        await session.commit()
+
+        # ======================================================
+        # ارسال به کاربر
+        # ======================================================
+
+        user = order.user
+
+        if user is None:
+            raise SanaeiApiError(
+                "کاربر سفارش پیدا نشد."
+            )
+
+        text = (
+            "🎉 <b>خرید شما با موفقیت انجام شد!</b>\n\n"
+            f"📦 <b>پلن:</b> {plan.name}\n"
+            f"🌐 <b>سرور:</b> {panel.name}\n"
+            f"📊 <b>حجم:</b> "
+            f"{'نامحدود' if plan.traffic_gb <= 0 else str(plan.traffic_gb) + ' GB'}\n"
+            f"⏳ <b>مدت:</b> {plan.duration_days} روز\n"
+            f"📱 <b>نام کانفیگ:</b> {email}\n\n"
+            "🔐 <b>کانفیگ شما:</b>\n\n"
+            f"<code>{config_link}</code>\n\n"
+            "روی لینک بالا بزنید و آن را در کلاینت VPN خود وارد کنید."
+        )
+
+        await bot.send_message(
+            user.telegram_id,
+            text,
+            parse_mode="HTML",
+        )
+
+    finally:
+
+        await client.close()

@@ -70,21 +70,13 @@ def _get_int_list(key: str) -> list[int]:
 
 @dataclass
 class PanelConfig:
-
     key: str
-
     name: str
-
     url: str
-
     api_token: str
-
-    api_base_path: str
-
     inbound_id: int
-
+    api_base_path: str = "/panel/api"
     protocol: str = "vless"
-
 
 # ============================================================
 # PLAN CONFIG
@@ -117,57 +109,33 @@ class PlanConfig:
 # ============================================================
 
 def _load_panels() -> dict[str, PanelConfig]:
-
-    raw = os.getenv("PANELS", "")
-
     keys = [
-        x.strip()
-        for x in raw.split(",")
-        if x.strip()
+        k.strip()
+        for k in os.getenv("PANELS", "").split(",")
+        if k.strip()
     ]
 
     panels: dict[str, PanelConfig] = {}
 
     for key in keys:
-
         prefix = f"PANEL_{key}_"
 
         panels[key] = PanelConfig(
-
             key=key,
-
-            name=_get(
-                prefix + "NAME",
-                key,
-                required=True,
+            name=_get(prefix + "NAME", key, required=True),
+            url=_get(prefix + "URL", required=True).rstrip("/"),
+            api_token=_get(prefix + "API_TOKEN", required=True),
+            inbound_id=int(
+                _get(prefix + "INBOUND_ID", required=True)
             ),
-
-            url=_get(
-                prefix + "URL",
-                required=True,
-            ).rstrip("/"),
-
-            api_token=_get(
-                prefix + "API_TOKEN",
-                required=True,
-            ),
-
             api_base_path=_get(
                 prefix + "API_BASE_PATH",
                 "/panel/api",
             ).rstrip("/"),
-
-            inbound_id=int(
-                _get(
-                    prefix + "INBOUND_ID",
-                    required=True,
-                )
-            ),
-
             protocol=_get(
                 prefix + "PROTOCOL",
                 "vless",
-            ).lower(),
+            ).strip().lower(),
         )
 
     return panels
