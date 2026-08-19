@@ -16,19 +16,46 @@ class SanaeiApiError(RuntimeError):
 
 
 class SanaeiClient:
+    """
+    Client for the Sanaei/3x-ui API used by this project.
+
+    Authentication:
+        Authorization: Bearer <API_TOKEN>
+
+    Client creation:
+        POST /panel/api/clients/add
+
+    Important:
+        - inbound is selected by inbound_id
+        - email is the client/config name
+        - totalGB and expiryTime belong to the client
+        - tgId must be an integer (0)
+    """
 
     def __init__(self, panel: PanelConfig):
-
         self.panel = panel
+
+        api_base_path = getattr(
+            panel,
+            "api_base_path",
+            "/panel/api",
+        ).strip()
+
+        if not api_base_path.startswith("/"):
+            api_base_path = "/" + api_base_path
+
+        api_base_path = api_base_path.rstrip("/")
+
+        self.api_base_path = api_base_path
 
         self._client = httpx.AsyncClient(
             base_url=panel.url.rstrip("/"),
             verify=False,
             timeout=30,
             headers={
-                "Authorization": f"Bearer {panel.api_token}",
                 "Accept": "application/json",
                 "Content-Type": "application/json",
+                "Authorization": f"Bearer {panel.api_token}",
             },
         )
 
@@ -43,51 +70,80 @@ class SanaeiClient:
         **kwargs,
     ) -> dict:
 
-        response = await self._client.request(
-            method,
-            path,
-            **kwargs,
-        )
+        if not path.startswith("/"):
+            path = "/" + path
 
-        text = response.text
+        try:
+            response = await self._client.request(
+                method,
+                path,
+                **kwargs,
+            )
+        except httpx.HTTPError as exc:
+            raise SanaeiApiError(
+                f"خطا در اتصال به پنل «{self.panel.name}»: {exc}"
+            ) from exc
+
+        # ------------------------------------------------------
+        # Endpoint not found
+        # ------------------------------------------------------
 
         if response.status_code == 404:
             raise SanaeiApiError(
                 "Endpoint پنل پیدا نشد.\n"
-                f"URL: {response.request.url}\n"
+                f"URL: {self.panel.url}{path}\n"
                 f"HTTP: {response.status_code}"
             )
 
-        if response.status_code == 401:
+        # ------------------------------------------------------
+        # Authentication
+        # ------------------------------------------------------
+
+        if response.status_code in (401, 403):
             raise SanaeiApiError(
-                f"احراز هویت پنل «{self.panel.name}» رد شد.\n"
-                "API Token را بررسی کن."
+                f"احراز هویت پنل «{self.panel.name}» ناموفق بود.\n"
+                "API Token را در panel.env بررسی کن."
             )
 
+        # ------------------------------------------------------
+        # Other HTTP errors
+        # ------------------------------------------------------
+
         if response.status_code >= 400:
+            body = response.text[:1000]
+
             raise SanaeiApiError(
-                f"خطای HTTP {response.status_code} از پنل "
-                f"«{self.panel.name}»:\n"
-                f"{text[:2000]}"
+                f"خطای HTTP پنل «{self.panel.name}»:\n"
+                f"HTTP {response.status_code}\n"
+                f"{body}"
             )
+
+        # ------------------------------------------------------
+        # JSON
+        # ------------------------------------------------------
 
         try:
             data = response.json()
-        except Exception:
+        except Exception as exc:
             raise SanaeiApiError(
-                "پاسخ پنل JSON معتبر نیست:\n"
-                f"{text[:2000]}"
-            )
+                f"پاسخ نامعتبر از پنل «{self.panel.name}» "
+                f"(HTTP {response.status_code})"
+            ) from exc
 
         if not isinstance(data, dict):
             raise SanaeiApiError(
-                f"فرمت پاسخ پنل نامعتبر است:\n{data}"
+                f"پاسخ نامعتبر از پنل «{self.panel.name}»."
             )
 
+        # ------------------------------------------------------
+        # Panel-level error
+        # ------------------------------------------------------
+
         if data.get("success") is False:
+            msg = data.get("msg") or "خطای نامشخص"
+
             raise SanaeiApiError(
-                f"خطای پنل «{self.panel.name}»: "
-                f"{data.get('msg', 'خطای نامشخص')}"
+                f"خطای پنل «{self.panel.name}»: {msg}"
             )
 
         return data
@@ -100,17 +156,10 @@ class SanaeiClient:
 
         data = await self._request(
             "GET",
-            f"{self.panel.api_base_path}/inbounds/list",
+            f"{self.api_base_path}/inbounds/list",
         )
 
-        obj = data.get("obj") or []
-
-        if isinstance(obj, dict):
-
-            if isinstance(obj.get("inbounds"), list):
-                return obj["inbounds"]
-
-            return []
+        obj = data.get("obj")
 
         if isinstance(obj, list):
             return obj
@@ -118,74 +167,55 @@ class SanaeiClient:
         return []
 
     # ==========================================================
+    # GET INBOUND
+    # ==========================================================
+
+    async def get_inbound(
+        self,
+        inbound_id: int,
+    ) -> dict:
+
+        # First try the normal endpoint.
+        try:
+            data = await self._request(
+                "GET",
+                f"{self.api_base_path}/inbounds/get/{inbound_id}",
+            )
+
+            obj = data.get("obj")
+
+            if isinstance(obj, dict):
+                return obj
+
+        except SanaeiApiError:
+            pass
+
+        # Fallback: find it in the inbound list.
+        inbounds = await self.list_inbounds()
+
+        for inbound in inbounds:
+            try:
+                if int(inbound.get("id")) == int(inbound_id):
+                    return inbound
+            except (TypeError, ValueError):
+                continue
+
+        raise SanaeiApiError(
+            f"اینباند شماره {inbound_id} "
+            f"روی پنل «{self.panel.name}» پیدا نشد."
+        )
+
+    # ==========================================================
     # ADD CLIENT
     # ==========================================================
 
-async def add_client(
-    self,
-    email: str,
-    inbound_id: int | None = None,
-) -> dict:
-
-    inbound_id = (
-        inbound_id
-        if inbound_id is not None
-        else self.panel.inbound_id
-    )
-
-    client_uuid = str(uuid.uuid4())
-    sub_id = uuid.uuid4().hex[:16]
-
-    payload = {
-        "client": {
-            "email": email,
-            "id": client_uuid,
-            "enable": True,
-            "tgId": 0,
-            "subId": sub_id,
-        },
-        "inboundIds": [
-            int(inbound_id)
-        ],
-    }
-
-    print(
-        "\n========== CREATE CLIENT =========="
-    )
-    print("PANEL:", self.panel.name)
-    print("INBOUND:", inbound_id)
-    print("EMAIL:", email)
-    print("UUID:", client_uuid)
-    print("PAYLOAD:", json.dumps(payload, ensure_ascii=False))
-    print("===================================\n")
-
-    await self._request(
-        "POST",
-        "/panel/api/clients/add",
-        json=payload,
-    )
-
-    return {
-        "client_uuid": client_uuid,
-        "email": email,
-        "sub_id": sub_id,
-        "inbound_id": inbound_id,
-    }
-
-        # ------------------------------------------------------
-        # نام کانفیگ = دقیقاً نامی که کاربر وارد کرده
-        # ------------------------------------------------------
-
-        email = (email or "").strip()
-
-        if not email:
-            raise SanaeiApiError(
-                "client email is required"
-            )
-
-        # ------------------------------------------------------
-        # inbound
-        # ------------------------------------------------------
+    async def add_client(
+        self,
+        email: str,
+        traffic_gb: int,
+        duration_days: int,
+        inbound_id: int | None = None,
+    ) -> dict:
 
         inbound_id = (
             inbound_id
@@ -193,60 +223,66 @@ async def add_client(
             else self.panel.inbound_id
         )
 
-        if not inbound_id:
+        # ------------------------------------------------------
+        # Client name / email
+        # ------------------------------------------------------
+
+        email = (email or "").strip()
+
+        if not email:
             raise SanaeiApiError(
-                "INBOUND_ID برای این پنل تنظیم نشده است."
+                "نام کانفیگ / email نمی‌تواند خالی باشد."
             )
 
-        inbound_id = int(inbound_id)
-
         # ------------------------------------------------------
-        # UUID
+        # UUID generated by us.
         # ------------------------------------------------------
 
         client_uuid = str(uuid.uuid4())
 
         # ------------------------------------------------------
-        # expiry
-        #
-        # اگر مدت 30 روز باشد:
-        # current time + 30 days
+        # Subscription ID
         # ------------------------------------------------------
 
-        if duration_days > 0:
+        sub_id = uuid.uuid4().hex[:16]
 
+        # ------------------------------------------------------
+        # Traffic
+        #
+        # 0 = unlimited
+        # ------------------------------------------------------
+
+        if traffic_gb <= 0:
+            total_bytes = 0
+        else:
+            total_bytes = (
+                int(traffic_gb)
+                * 1024
+                * 1024
+                * 1024
+            )
+
+        # ------------------------------------------------------
+        # Expiration
+        #
+        # 0 = unlimited
+        # ------------------------------------------------------
+
+        if duration_days <= 0:
+            expire_ms = 0
+        else:
             expire_ms = int(
                 (
                     datetime.now(timezone.utc)
-                    + timedelta(days=duration_days)
+                    + timedelta(days=int(duration_days))
                 ).timestamp()
                 * 1000
             )
 
-        else:
-            expire_ms = 0
-
         # ------------------------------------------------------
-        # حجم
-        # ------------------------------------------------------
-
-        if traffic_gb > 0:
-
-            total_bytes = (
-                traffic_gb
-                * 1024
-                * 1024
-                * 1024
-            )
-
-        else:
-
-            total_bytes = 0
-
-        # ======================================================
-        # CLIENT
+        # IMPORTANT
         #
-        # ساختار واقعی API پنل شما
+        # Based on the actual panel payload:
         #
         # client:
         # {
@@ -255,103 +291,74 @@ async def add_client(
         #   id,
         #   enable,
         #   expiryTime,
-        #   totalGB,
         #   limitIp,
-        #   tgId
+        #   tgId,
+        #   totalGB
         # }
         #
-        # auth/password را خود پنل تولید می‌کند.
-        # ======================================================
+        # inboundIds:
+        # [
+        #   2,
+        #   8
+        # ]
+        #
+        # tgId MUST be integer 0.
+        # ------------------------------------------------------
 
-        client = {
+        client_obj = {
             "email": email,
-            "subId": uuid.uuid4().hex[:16],
+            "subId": sub_id,
             "id": client_uuid,
             "enable": True,
             "expiryTime": expire_ms,
-            "totalGB": total_bytes,
             "limitIp": 0,
             "tgId": 0,
+            "totalGB": total_bytes,
         }
 
-        # ======================================================
-        # PAYLOAD واقعی API
-        #
-        # {
-        #     "client": {...},
-        #     "inboundIds": [2, 8]
-        # }
-        # ======================================================
-
         payload = {
-            "client": client,
+            "client": client_obj,
             "inboundIds": [
-                inbound_id
+                int(inbound_id)
             ],
         }
 
         # ------------------------------------------------------
-        # POST /panel/api/clients/add
+        # CREATE CLIENT
         # ------------------------------------------------------
 
         data = await self._request(
             "POST",
-            f"{self.panel.api_base_path}/clients/add",
+            f"{self.api_base_path}/clients/add",
             json=payload,
         )
 
-        # ======================================================
-        # پاسخ API ممکن است Client ساخته‌شده را برگرداند.
-        # اگر UUID را پنل تغییر داده باشد، UUID واقعی را
-        # از پاسخ می‌گیریم.
-        # ======================================================
+        # ------------------------------------------------------
+        # Get inbound after successful creation.
+        #
+        # We need stream settings / port for building
+        # the client link.
+        # ------------------------------------------------------
 
-        response_client = data.get("client")
-
-        if isinstance(response_client, dict):
-
-            real_uuid = response_client.get("id")
-
-            if real_uuid:
-                client_uuid = str(real_uuid)
-
-            real_email = response_client.get("email")
-
-            if real_email:
-                email = str(real_email)
-
-        # ======================================================
-        # دریافت inbound
-        # ======================================================
-
-        inbounds = await self.list_inbounds()
-
-        inbound = next(
-            (
-                item
-                for item in inbounds
-                if int(item.get("id", 0))
-                == inbound_id
-            ),
-            None,
+        inbound = await self.get_inbound(
+            int(inbound_id)
         )
-
-        if inbound is None:
-
-            raise SanaeiApiError(
-                f"اینباند شماره {inbound_id} روی پنل "
-                f"«{self.panel.name}» پیدا نشد."
-            )
 
         return {
             "client_uuid": client_uuid,
+            "sub_id": sub_id,
             "email": email,
-            "inbound": inbound,
+            "inbound_id": int(inbound_id),
+            "traffic_gb": traffic_gb,
+            "duration_days": duration_days,
+            "expiry_ms": expire_ms,
+            "total_bytes": total_bytes,
             "response": data,
+            "inbound": inbound,
         }
 
     # ==========================================================
-    # GET CLIENT TRAFFIC
+    # CLIENT TRAFFIC
     # ==========================================================
 
     async def get_client_traffic(
@@ -359,16 +366,22 @@ async def add_client(
         email: str,
     ) -> dict | None:
 
-        email = (email or "").strip()
+        email = quote(
+            (email or "").strip(),
+            safe="",
+        )
 
         data = await self._request(
             "GET",
-            f"{self.panel.api_base_path}"
-            f"/inbounds/getClientTraffics/"
-            f"{quote(email)}",
+            f"{self.api_base_path}/inbounds/getClientTraffics/{email}",
         )
 
-        return data.get("obj")
+        obj = data.get("obj")
+
+        if isinstance(obj, dict):
+            return obj
+
+        return None
 
     # ==========================================================
     # DELETE CLIENT
@@ -382,9 +395,8 @@ async def add_client(
 
         await self._request(
             "POST",
-            f"{self.panel.api_base_path}"
-            f"/inbounds/{inbound_id}"
-            f"/delClient/{client_uuid}",
+            f"{self.api_base_path}/inbounds/"
+            f"{int(inbound_id)}/delClient/{client_uuid}",
         )
 
     # ==========================================================
@@ -397,7 +409,7 @@ async def add_client(
 
 
 # ==============================================================
-# BUILD CONFIG LINK
+# CONFIG LINK
 # ==============================================================
 
 def build_config_link(
@@ -407,25 +419,59 @@ def build_config_link(
     email: str,
 ) -> str:
 
-    stream_settings_raw = (
-        inbound.get("streamSettings")
-        or "{}"
-    )
+    """
+    Builds VLESS/VMess link from the selected inbound.
 
-    try:
+    IMPORTANT:
+    The VPN server address should NOT blindly be taken from
+    panel.url.
 
-        stream_settings = json.loads(
-            stream_settings_raw
-        )
+    If the PanelConfig has a dedicated server_host/server_ip,
+    use that.
 
-    except Exception:
+    Otherwise, fall back to panel.url hostname.
+    """
 
+    # ----------------------------------------------------------
+    # Stream settings
+    # ----------------------------------------------------------
+
+    raw_stream = inbound.get("streamSettings") or "{}"
+
+    if isinstance(raw_stream, str):
+
+        try:
+            stream_settings = json.loads(raw_stream)
+        except Exception:
+            stream_settings = {}
+
+    elif isinstance(raw_stream, dict):
+        stream_settings = raw_stream
+
+    else:
         stream_settings = {}
+
+    # ----------------------------------------------------------
+    # Protocol
+    # ----------------------------------------------------------
+
+    protocol = (
+        getattr(panel, "protocol", "vless")
+        or "vless"
+    ).lower()
+
+    # ----------------------------------------------------------
+    # Network
+    # ----------------------------------------------------------
 
     network = stream_settings.get(
         "network",
         "tcp",
     )
+
+    # ----------------------------------------------------------
+    # Security
+    # ----------------------------------------------------------
 
     security = stream_settings.get(
         "security",
@@ -433,31 +479,73 @@ def build_config_link(
     )
 
     # ----------------------------------------------------------
-    # HOST
+    # Server address
+    #
+    # Prefer server_host/server_ip if they exist in PanelConfig.
+    # This is important because the panel URL may point to Iran
+    # while the actual VPN server is Poland.
     # ----------------------------------------------------------
 
-    host = (
-        panel.url
-        .split("://")[-1]
-        .split(":")[0]
-        .split("/")[0]
+    server_host = getattr(
+        panel,
+        "server_host",
+        "",
     )
+
+    if not server_host:
+        server_host = getattr(
+            panel,
+            "server_ip",
+            "",
+        )
+
+    if not server_host:
+
+        panel_url = panel.url
+
+        if "://" in panel_url:
+            server_host = (
+                panel_url
+                .split("://", 1)[1]
+                .split("/", 1)[0]
+                .split(":", 1)[0]
+            )
+        else:
+            server_host = (
+                panel_url
+                .split("/", 1)[0]
+                .split(":", 1)[0]
+            )
+
+    # ----------------------------------------------------------
+    # Port
+    # ----------------------------------------------------------
 
     port = inbound.get("port")
 
+    if port is None:
+        raise SanaeiApiError(
+            f"پورت اینباند برای پنل «{panel.name}» پیدا نشد."
+        )
+
+    # ----------------------------------------------------------
+    # Remark
+    # ----------------------------------------------------------
+
     remark = quote(
-        f"{panel.name}-{email}"
+        f"{panel.name}-{email}",
+        safe="",
     )
 
     # ==========================================================
     # VLESS
     # ==========================================================
 
-    if panel.protocol.lower() == "vless":
+    if protocol == "vless":
 
         params = [
-            f"type={network}",
-            f"security={security}",
+            f"type={quote(str(network))}",
+            f"security={quote(str(security))}",
         ]
 
         # ------------------------------------------------------
@@ -466,47 +554,85 @@ def build_config_link(
 
         if security == "tls":
 
+            tls_settings = (
+                stream_settings.get(
+                    "tlsSettings",
+                    {},
+                )
+                or {}
+            )
+
+            sni = (
+                tls_settings.get("serverName")
+                or tls_settings.get("serverNames", [None])[0]
+                or server_host
+            )
+
             params.append(
-                "sni=" + quote(host)
+                "sni=" + quote(str(sni))
             )
 
         # ------------------------------------------------------
-        # REALITY
+        # Reality
         # ------------------------------------------------------
 
-        if security == "reality":
+        elif security == "reality":
 
-            reality = stream_settings.get(
-                "realitySettings",
-                {},
+            reality_settings = (
+                stream_settings.get(
+                    "realitySettings",
+                    {},
+                )
+                or {}
             )
 
-            server_names = reality.get(
-                "serverNames",
-                [],
+            settings_obj = (
+                reality_settings.get(
+                    "settings",
+                    {},
+                )
+                or {}
             )
 
-            if server_names:
+            pbk = (
+                settings_obj.get("publicKey")
+                or reality_settings.get("publicKey")
+            )
 
+            sid = (
+                settings_obj.get("shortId")
+                or reality_settings.get("shortId")
+                or ""
+            )
+
+            fp = (
+                settings_obj.get("fingerprint")
+                or "chrome"
+            )
+
+            sni = (
+                reality_settings.get("serverName")
+                or reality_settings.get("serverNames", [None])[0]
+                or server_host
+            )
+
+            if pbk:
                 params.append(
-                    "sni="
-                    + quote(
-                        str(server_names[0])
-                    )
+                    "pbk=" + quote(str(pbk))
                 )
 
-            short_ids = reality.get(
-                "shortIds",
-                [],
+            if sid:
+                params.append(
+                    "sid=" + quote(str(sid))
+                )
+
+            params.append(
+                "fp=" + quote(str(fp))
             )
 
-            if short_ids:
-
+            if sni:
                 params.append(
-                    "sid="
-                    + quote(
-                        str(short_ids[0])
-                    )
+                    "sni=" + quote(str(sni))
                 )
 
         # ------------------------------------------------------
@@ -515,40 +641,39 @@ def build_config_link(
 
         if network == "ws":
 
-            ws = stream_settings.get(
-                "wsSettings",
-                {},
+            ws_settings = (
+                stream_settings.get(
+                    "wsSettings",
+                    {},
+                )
+                or {}
             )
 
-            path = ws.get(
+            path = ws_settings.get(
                 "path",
                 "/",
             )
 
+            headers = ws_settings.get(
+                "headers",
+                {},
+            ) or {}
+
+            host = (
+                headers.get("Host")
+                or headers.get("host")
+            )
+
             params.append(
-                "path="
-                + quote(
-                    path,
-                    safe="",
+                "path=" + quote(
+                    str(path),
+                    safe="/",
                 )
             )
 
-            headers = ws.get(
-                "headers",
-                {},
-            )
-
-            ws_host = headers.get(
-                "Host"
-            )
-
-            if ws_host:
-
+            if host:
                 params.append(
-                    "host="
-                    + quote(
-                        str(ws_host)
-                    )
+                    "host=" + quote(str(host))
                 )
 
         # ------------------------------------------------------
@@ -557,30 +682,30 @@ def build_config_link(
 
         if network == "grpc":
 
-            grpc = stream_settings.get(
-                "grpcSettings",
-                {},
+            grpc_settings = (
+                stream_settings.get(
+                    "grpcSettings",
+                    {},
+                )
+                or {}
             )
 
-            service_name = grpc.get(
+            service_name = grpc_settings.get(
                 "serviceName",
                 "",
             )
 
             if service_name:
-
                 params.append(
                     "serviceName="
-                    + quote(
-                        str(service_name)
-                    )
+                    + quote(str(service_name))
                 )
 
         query = "&".join(params)
 
         return (
             f"vless://{client_uuid}"
-            f"@{host}:{port}"
+            f"@{server_host}:{port}"
             f"?{query}"
             f"#{remark}"
         )
@@ -592,28 +717,49 @@ def build_config_link(
     vmess_obj = {
         "v": "2",
         "ps": f"{panel.name}-{email}",
-        "add": host,
-        "port": port,
+        "add": server_host,
+        "port": str(port),
         "id": client_uuid,
         "aid": "0",
+        "scy": "auto",
         "net": network,
         "type": "none",
         "host": "",
-        "path": (
-            stream_settings
-            .get("wsSettings", {})
-            .get("path", "")
-        ),
-        "tls": (
-            "tls"
-            if security in ("tls", "reality")
-            else ""
-        ),
+        "path": "",
+        "tls": "",
     }
+
+    if network == "ws":
+
+        ws_settings = (
+            stream_settings.get(
+                "wsSettings",
+                {},
+            )
+            or {}
+        )
+
+        vmess_obj["path"] = ws_settings.get(
+            "path",
+            "/",
+        )
+
+        headers = ws_settings.get(
+            "headers",
+            {},
+        ) or {}
+
+        vmess_obj["host"] = (
+            headers.get("Host")
+            or headers.get("host")
+            or ""
+        )
+
+    if security == "tls":
+        vmess_obj["tls"] = "tls"
 
     raw = json.dumps(
         vmess_obj,
-        ensure_ascii=False,
         separators=(",", ":"),
     ).encode()
 
