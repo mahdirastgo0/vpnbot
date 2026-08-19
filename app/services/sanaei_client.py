@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 import logging
 
 import httpx
@@ -218,7 +219,7 @@ class SanaeiClient:
         individual_links = await self.get_client_links(email)
 
         # ------------------------------------------------------
-        # دریافت لینک‌های سابسکریپشن از پنل (احتمالاً خالی)
+        # دریافت لینک‌های سابسکریپشن از پنل (که معمولاً خالی است)
         # ------------------------------------------------------
 
         subscription_links = []
@@ -228,7 +229,7 @@ class SanaeiClient:
             logger.warning(f"خطا در دریافت subLinks: {e}")
             subscription_links = []
 
-        logger.info(f"تعداد لینک‌های سابسکریپشن دریافت‌شده: {len(subscription_links)}")
+        logger.info(f"تعداد لینک‌های سابسکریپشن دریافت‌شده از پنل: {len(subscription_links)}")
 
         # ------------------------------------------------------
         # تعیین لینک اصلی سابسکریپشن
@@ -238,23 +239,27 @@ class SanaeiClient:
             subscription_link = subscription_links[0]
         else:
             # خودمان لینک می‌سازیم
-            # اول از subscription_url تنظیمات پنل استفاده می‌کنیم
-            sub_base = getattr(self.panel, "subscription_url", None)
-            if not sub_base:
-                # اگر تنظیم نشده، از panel.url استفاده می‌کنیم و /sub را اضافه می‌کنیم
-                # اما ممکن است panel.url شامل مسیر api باشد، پس بهتر است از یک آدرس ثابت استفاده کنیم
-                # برای fallback، از panel.url بدون مسیر اضافی استفاده می‌کنیم
-                base = self.panel.url.rstrip("/")
-                # اگر base شامل /panel/api یا موارد مشابه بود، ممکن است نیاز به اصلاح داشته باشد.
-                # اما برای سادگی، همان را با /sub ترکیب می‌کنیم.
-                sub_base = f"{base}/sub"
-            subscription_link = f"{sub_base}/{quote(str(actual_sub_id))}"
+            subscription_link = self.build_subscription_url(actual_sub_id)
 
-        # اگر به هر دلیلی لینک ساخته نشد، خطا بده
+        # ------------------------------------------------------
+        # چک نهایی و Fallback قوی
+        # ------------------------------------------------------
+
+        if not subscription_link:
+            # اگر به هر دلیلی لینک ساخته نشد، یک لینک پیش‌فرض با hostname و پورت 2096 می‌سازیم
+            hostname = self._extract_hostname()
+            if hostname:
+                subscription_link = f"https://{hostname}:2096/sub/{quote(str(actual_sub_id))}"
+                logger.warning(f"لینک سابسکریپشن با fallback نهایی ساخته شد: {subscription_link}")
+            else:
+                raise SanaeiApiError(
+                    f"امکان ساخت لینک Subscription وجود ندارد. "
+                    f"subId: {actual_sub_id}, panel.url: {self.panel.url}"
+                )
+
         if not subscription_link:
             raise SanaeiApiError(
-                f"امکان ساخت لینک Subscription وجود ندارد. "
-                f"subId: {actual_sub_id}, panel.url: {self.panel.url}"
+                "لینک Subscription برای کلاینت از پنل دریافت نشد و امکان ساخت آن وجود ندارد."
             )
 
         # ------------------------------------------------------
@@ -396,7 +401,7 @@ class SanaeiClient:
         return links[0]
 
     # ==========================================================
-    # BUILD SUBSCRIPTION URL (دیگر استفاده نمی‌شود، اما نگه‌داری می‌شود)
+    # BUILD SUBSCRIPTION URL
     # ==========================================================
 
     def build_subscription_url(
@@ -404,6 +409,7 @@ class SanaeiClient:
         sub_id: str,
     ) -> str | None:
 
+        # اولویت اول: subscription_url از تنظیمات پنل
         subscription_base = getattr(
             self.panel,
             "subscription_url",
@@ -417,14 +423,23 @@ class SanaeiClient:
                 + quote(str(sub_id))
             )
 
-        base_url = self.panel.url.rstrip("/")
-        if base_url:
-            return (
-                f"{base_url}/sub/"
-                f"{quote(str(sub_id))}"
-            )
+        # اگر تنظیم نشده بود، از panel.url استفاده می‌کنیم
+        # اما برای پنل شما، panel.url شامل پورت 39217 و مسیر aN1MrpoX46nkjnJyAr است
+        # بنابراین ما hostname را استخراج کرده و پورت 2096 و مسیر /sub/ را اضافه می‌کنیم
+        hostname = self._extract_hostname()
+        if hostname:
+            return f"https://{hostname}:2096/sub/{quote(str(sub_id))}"
 
         return None
+
+    def _extract_hostname(self) -> str | None:
+        """hostname را از panel.url استخراج می‌کند (بدون پورت و مسیر)"""
+        if not self.panel.url:
+            return None
+
+        parsed = urlparse(self.panel.url)
+        hostname = parsed.hostname
+        return hostname
 
     # ==========================================================
     # CLIENT TRAFFIC
