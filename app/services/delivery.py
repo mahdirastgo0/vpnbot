@@ -34,13 +34,13 @@ async def provision_and_deliver(
             f"پنل «{plan.panel_key}» پیدا نشد."
         )
 
-    # ==========================================================
-    # ساخت کلاینت API
-    # ==========================================================
-
     client = SanaeiClient(panel)
 
     try:
+
+        # ======================================================
+        # نام کانفیگ
+        # ======================================================
 
         email = (
             order.config_name
@@ -48,7 +48,10 @@ async def provision_and_deliver(
         )
 
         # ======================================================
-        # ساخت کانفیگ
+        # ساخت Client روی پنل
+        #
+        # endpoint:
+        # POST /panel/api/clients/add
         # ======================================================
 
         result = await client.add_client(
@@ -59,10 +62,41 @@ async def provision_and_deliver(
         )
 
         client_uuid = result["client_uuid"]
-        inbound = result["inbound"]
 
         # ======================================================
-        # ساخت لینک
+        # پیدا کردن Inbound
+        #
+        # اینجا فقط برای گرفتن port و streamSettings است.
+        # دیگر addClient صدا زده نمی‌شود.
+        # ======================================================
+
+        inbounds = await client.list_inbounds()
+
+        inbound = None
+
+        for item in inbounds:
+
+            try:
+                item_id = int(item.get("id"))
+
+            except (
+                TypeError,
+                ValueError,
+            ):
+                continue
+
+            if item_id == int(panel.inbound_id):
+                inbound = item
+                break
+
+        if inbound is None:
+            raise SanaeiApiError(
+                f"اینباند شماره {panel.inbound_id} "
+                f"روی پنل «{panel.name}» پیدا نشد."
+            )
+
+        # ======================================================
+        # ساخت لینک کانفیگ
         # ======================================================
 
         config_link = build_config_link(
@@ -91,7 +125,7 @@ async def provision_and_deliver(
         await session.commit()
 
         # ======================================================
-        # ارسال به کاربر
+        # کاربر
         # ======================================================
 
         user = order.user
@@ -101,12 +135,21 @@ async def provision_and_deliver(
                 "کاربر سفارش پیدا نشد."
             )
 
+        # ======================================================
+        # متن ارسال کانفیگ
+        # ======================================================
+
+        traffic_text = (
+            "نامحدود"
+            if plan.traffic_gb <= 0
+            else f"{plan.traffic_gb} GB"
+        )
+
         text = (
             "🎉 <b>خرید شما با موفقیت انجام شد!</b>\n\n"
             f"📦 <b>پلن:</b> {plan.name}\n"
             f"🌐 <b>سرور:</b> {panel.name}\n"
-            f"📊 <b>حجم:</b> "
-            f"{'نامحدود' if plan.traffic_gb <= 0 else str(plan.traffic_gb) + ' GB'}\n"
+            f"📊 <b>حجم:</b> {traffic_text}\n"
             f"⏳ <b>مدت:</b> {plan.duration_days} روز\n"
             f"📱 <b>نام کانفیگ:</b> {email}\n\n"
             "🔐 <b>کانفیگ شما:</b>\n\n"
