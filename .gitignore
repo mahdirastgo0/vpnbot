@@ -1,4 +1,5 @@
 .env
+panels.env
 __pycache__/
 *.pyc
 .venv/
@@ -10,3 +11,4 @@ venv/
 *.sqlite3
 qrcodes/
 receipts/
+
