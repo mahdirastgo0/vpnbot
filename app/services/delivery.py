@@ -72,9 +72,9 @@ async def provision_and_deliver(
         client_uuid = result["client_uuid"]
         sub_id = result["sub_id"]
 
-        subscription_link = result[
-            "subscription_link"
-        ]
+        subscription_link = client.build_subscription_url(sub_id)
+
+        individual_links = result.get("individual_links", [])
 
         subscription_links = result.get(
             "subscription_links",
