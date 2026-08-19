@@ -4,6 +4,7 @@ from aiogram.types import CallbackQuery, InputFile
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database.crud import get_or_create_user
 from app.database.models import User, VpnConfig
 from app.keyboards.inline import config_list_keyboard, back_to_menu_keyboard
 from app.utils import texts
@@ -38,25 +39,46 @@ async def show_configs_list(message: types.Message, user: User, session: AsyncSe
 
 
 # ---------- هندلر دستور /my_configs ----------
+# نکته: به‌جای اتکا به «user» تزریق‌شده توسط middleware (که معلوم نیست
+# روی همه‌ی روترها/انواع هندلر فعال باشه)، دقیقاً مثل start.py خود
+# کاربر رو مستقیم از دیتابیس می‌گیریم/می‌سازیم. این کار خطای
+# «missing 1 required positional argument: 'user'» رو کاملاً حذف می‌کنه.
 @router.message(Command("my_configs"))
-async def my_configs_command(message: types.Message, user: User, session: AsyncSession):
+async def my_configs_command(message: types.Message, session: AsyncSession):
+    user = await get_or_create_user(
+        session,
+        telegram_id=message.from_user.id,
+        username=message.from_user.username,
+        full_name=message.from_user.full_name,
+    )
     await show_configs_list(message, user, session)
 
 
 # ---------- هندلر دکمه «📂 کانفیگ‌های من» از منوی اصلی (Reply Keyboard) ----------
-# نکته: این دکمه یک متن معمولی می‌فرسته (نه CallbackQuery)، برای همین باید
-# با message/F.text گرفته بشه. این همون هندلری بود که کم بود و باعث
-# «Update is not handled» می‌شد. اگر متن دقیق دکمه‌تون توی
-# app/keyboards/user_kb.py چیز دیگه‌ایه، همین رشته رو با اون یکی بدید.
+# این دکمه یک متن معمولی می‌فرسته (نه CallbackQuery)، برای همین باید
+# با message/F.text گرفته بشه. اگر متن دقیق دکمه‌تون توی
+# app/keyboards/user_kb.py چیز دیگه‌ایه، همین رشته رو با اون یکی عوض کنید.
 @router.message(F.text == "📂 کانفیگ‌های من")
-async def my_configs_button(message: types.Message, user: User, session: AsyncSession):
+async def my_configs_button(message: types.Message, session: AsyncSession):
+    user = await get_or_create_user(
+        session,
+        telegram_id=message.from_user.id,
+        username=message.from_user.username,
+        full_name=message.from_user.full_name,
+    )
     await show_configs_list(message, user, session)
 
 
 # ---------- هندلر دکمه «کانفیگ‌های من» به‌صورت اینلاین (در صورت استفاده جای دیگه) ----------
 @router.callback_query(F.data == "my_configs")
-async def my_configs_callback(callback: CallbackQuery, user: User, session: AsyncSession):
+async def my_configs_callback(callback: CallbackQuery, session: AsyncSession):
     await callback.answer()
+    user = await get_or_create_user(
+        session,
+        telegram_id=callback.from_user.id,
+        username=callback.from_user.username,
+        full_name=callback.from_user.full_name,
+    )
     await show_configs_list(callback.message, user, session)
 
 
@@ -69,7 +91,7 @@ async def back_to_menu_callback(callback: CallbackQuery):
 
     # منوی اصلی یک ReplyKeyboardMarkup هست، پس با edit_text قابل نمایش نیست
     # (edit_text فقط InlineKeyboardMarkup قبول می‌کنه). به همین خاطر پیام
-    # قبلی رو حذف/پاک می‌کنیم و یک پیام جدید با کیبورد اصلی می‌فرستیم.
+    # قبلی رو حذف می‌کنیم و یک پیام جدید با کیبورد اصلی می‌فرستیم.
     try:
         await callback.message.delete()
     except Exception:
@@ -87,8 +109,14 @@ async def show_config(
     callback: CallbackQuery,
     callback_data: ConfigListCallback,
     session: AsyncSession,
-    user: User,
 ):
+    user = await get_or_create_user(
+        session,
+        telegram_id=callback.from_user.id,
+        username=callback.from_user.username,
+        full_name=callback.from_user.full_name,
+    )
+
     vpn_config = await session.get(VpnConfig, callback_data.config_id)
     if not vpn_config:
         await callback.answer("کانفیگ یافت نشد.", show_alert=True)
