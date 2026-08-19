@@ -4,10 +4,13 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
+import logging
 
 import httpx
 
 from app.config import PanelConfig
+
+logger = logging.getLogger(__name__)
 
 
 class SanaeiApiError(RuntimeError):
@@ -131,30 +134,17 @@ class SanaeiClient:
         client_uuid = str(uuid.uuid4())
 
         # ------------------------------------------------------
-        # حجم
+        # حجم و انقضا
         # ------------------------------------------------------
 
         if traffic_gb and traffic_gb > 0:
-            total_bytes = (
-                traffic_gb
-                * 1024
-                * 1024
-                * 1024
-            )
+            total_bytes = traffic_gb * 1024 * 1024 * 1024
         else:
             total_bytes = 0
 
-        # ------------------------------------------------------
-        # تاریخ انقضا
-        # ------------------------------------------------------
-
         if duration_days and duration_days > 0:
             expire_ms = int(
-                (
-                    datetime.now(timezone.utc)
-                    + timedelta(days=duration_days)
-                ).timestamp()
-                * 1000
+                (datetime.now(timezone.utc) + timedelta(days=duration_days)).timestamp() * 1000
             )
         else:
             expire_ms = 0
@@ -177,9 +167,7 @@ class SanaeiClient:
         }
 
         payload = {
-            "inboundIds": [
-                int(inbound_id)
-            ],
+            "inboundIds": [int(inbound_id)],
             "client": client_obj,
         }
 
@@ -221,6 +209,8 @@ class SanaeiClient:
                 "کلاینت ساخته شد اما subId واقعی از پنل دریافت نشد."
             )
 
+        logger.info(f"subId دریافت شده از پنل: {actual_sub_id}")
+
         # ------------------------------------------------------
         # لینک‌های تکی
         # ------------------------------------------------------
@@ -234,9 +224,11 @@ class SanaeiClient:
         subscription_links = []
         try:
             subscription_links = await self.get_subscription_links(actual_sub_id)
-        except SanaeiApiError:
-            # در صورت خطا، لیست خالی در نظر گرفته می‌شود
+        except SanaeiApiError as e:
+            logger.warning(f"خطا در دریافت subLinks: {e}")
             subscription_links = []
+
+        logger.info(f"تعداد لینک‌های سابسکریپشن دریافت‌شده: {len(subscription_links)}")
 
         # ------------------------------------------------------
         # تعیین لینک اصلی سابسکریپشن
@@ -248,7 +240,21 @@ class SanaeiClient:
             # خودمان لینک می‌سازیم
             subscription_link = self.build_subscription_url(actual_sub_id)
 
-        # ** چک نهایی **
+        # ======================================================
+        # FALLBACK قوی: اگر لینک ساخته نشد، با panel.url یک لینک می‌سازیم
+        # ======================================================
+        if not subscription_link:
+            base_url = self.panel.url.rstrip("/")
+            if base_url:
+                subscription_link = f"{base_url}/sub/{quote(str(actual_sub_id))}"
+                logger.warning(f"لینک سابسکریپشن با fallback ساخته شد: {subscription_link}")
+            else:
+                raise SanaeiApiError(
+                    f"امکان ساخت لینک Subscription وجود ندارد. "
+                    f"subId: {actual_sub_id}, panel.url: {self.panel.url}"
+                )
+
+        # چک نهایی
         if not subscription_link:
             raise SanaeiApiError(
                 "لینک Subscription برای کلاینت از پنل دریافت نشد و امکان ساخت آن وجود ندارد."
@@ -379,7 +385,7 @@ class SanaeiClient:
         return links
 
     # ==========================================================
-    # GET SUBSCRIPTION LINK (قدیمی، برای سازگاری)
+    # GET SUBSCRIPTION LINK (قدیمی)
     # ==========================================================
 
     async def get_subscription_link(
@@ -414,7 +420,6 @@ class SanaeiClient:
                 + quote(str(sub_id))
             )
 
-        # fallback
         base_url = self.panel.url.rstrip("/")
         if base_url:
             return (

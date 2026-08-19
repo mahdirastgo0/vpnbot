@@ -53,15 +53,7 @@ async def provision_and_deliver(
         subscription_links = result.get("subscription_links", [])
         individual_links = result.get("individual_links", [])
 
-        # ======================================================
-        # تاریخ انقضا
-        # ======================================================
-
         expire_at = datetime.now(timezone.utc) + timedelta(days=plan.duration_days)
-
-        # ======================================================
-        # ذخیره در دیتابیس
-        # ======================================================
 
         vpn_config = order.vpn_config
 
@@ -96,10 +88,6 @@ async def provision_and_deliver(
             vpn_config.subscription_link = subscription_link
 
         await session.commit()
-
-        # ======================================================
-        # ارسال پیام به کاربر
-        # ======================================================
 
         traffic_text = "نامحدود" if plan.traffic_gb <= 0 else f"{plan.traffic_gb} GB"
 
