@@ -38,33 +38,43 @@ async def provision_and_deliver(
 
     try:
 
-        # ------------------------------------------------------
-        # Client name
-        # ------------------------------------------------------
+        # --------------------------------------------------
+        # اسم کانفیگ دقیقاً همان چیزی است که کاربر انتخاب کرده
+        # --------------------------------------------------
 
         email = (
-            order.config_name
-            or f"user-{order.user.telegram_id}-{order.id}"
+            (order.config_name or "").strip()
         )
 
-        # ------------------------------------------------------
-        # Create client on panel
-        # ------------------------------------------------------
+        if not email:
+            email = (
+                f"user-"
+                f"{order.user.telegram_id}-"
+                f"{order.id}"
+            )
+
+        # --------------------------------------------------
+        # ساخت کلاینت روی پنل
+        # --------------------------------------------------
 
         result = await client.add_client(
             email=email,
             traffic_gb=plan.traffic_gb,
             duration_days=plan.duration_days,
             inbound_id=panel.inbound_id,
-            telegram_id=order.user.telegram_id,
         )
 
-        client_uuid = result["client_uuid"]
-        inbound = result["inbound"]
+        client_uuid = result[
+            "client_uuid"
+        ]
 
-        # ------------------------------------------------------
-        # Build config
-        # ------------------------------------------------------
+        inbound = result[
+            "inbound"
+        ]
+
+        # --------------------------------------------------
+        # ساخت لینک
+        # --------------------------------------------------
 
         config_link = build_config_link(
             panel=panel,
@@ -73,9 +83,9 @@ async def provision_and_deliver(
             email=email,
         )
 
-        # ------------------------------------------------------
-        # Save
-        # ------------------------------------------------------
+        # --------------------------------------------------
+        # ذخیره اطلاعات
+        # --------------------------------------------------
 
         if hasattr(order, "client_uuid"):
             order.client_uuid = client_uuid
@@ -91,9 +101,9 @@ async def provision_and_deliver(
 
         await session.commit()
 
-        # ------------------------------------------------------
-        # User
-        # ------------------------------------------------------
+        # --------------------------------------------------
+        # ارسال کانفیگ به کاربر
+        # --------------------------------------------------
 
         user = order.user
 
@@ -101,10 +111,6 @@ async def provision_and_deliver(
             raise SanaeiApiError(
                 "کاربر سفارش پیدا نشد."
             )
-
-        # ------------------------------------------------------
-        # Message
-        # ------------------------------------------------------
 
         traffic_text = (
             "نامحدود"
@@ -121,7 +127,8 @@ async def provision_and_deliver(
             f"📱 <b>نام کانفیگ:</b> {email}\n\n"
             "🔐 <b>کانفیگ شما:</b>\n\n"
             f"<code>{config_link}</code>\n\n"
-            "روی لینک بالا بزنید و آن را در کلاینت VPN خود وارد کنید."
+            "روی لینک بالا بزنید و آن را "
+            "در کلاینت VPN خود وارد کنید."
         )
 
         await bot.send_message(

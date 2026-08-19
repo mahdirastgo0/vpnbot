@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -18,7 +17,6 @@ class SanaeiApiError(RuntimeError):
 class SanaeiClient:
 
     def __init__(self, panel: PanelConfig):
-
         self.panel = panel
 
         self._client = httpx.AsyncClient(
@@ -26,15 +24,11 @@ class SanaeiClient:
             verify=False,
             timeout=30,
             headers={
+                "Authorization": f"Bearer {panel.api_token}",
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {panel.api_token}",
             },
         )
-
-    # ==========================================================
-    # REQUEST
-    # ==========================================================
 
     async def _request(
         self,
@@ -43,106 +37,65 @@ class SanaeiClient:
         **kwargs,
     ) -> dict:
 
-        try:
-            response = await self._client.request(
-                method,
-                path,
-                **kwargs,
-            )
+        resp = await self._client.request(
+            method,
+            path,
+            **kwargs,
+        )
 
-        except httpx.RequestError as e:
-            raise SanaeiApiError(
-                f"ارتباط با پنل «{self.panel.name}» برقرار نشد:\n{e}"
-            ) from e
+        text = resp.text
 
-        if response.status_code == 404:
+        if resp.status_code == 404:
             raise SanaeiApiError(
                 f"Endpoint پنل پیدا نشد.\n"
-                f"URL: {response.request.url}\n"
+                f"URL: {resp.request.url}\n"
                 f"HTTP: 404"
             )
 
-        if response.status_code in (401, 403):
+        if resp.status_code == 401:
             raise SanaeiApiError(
-                f"احراز هویت پنل «{self.panel.name}» ناموفق بود.\n"
-                f"HTTP: {response.status_code}"
+                f"احراز هویت پنل «{self.panel.name}» رد شد."
             )
 
-        if response.status_code >= 400:
+        if resp.status_code >= 400:
             raise SanaeiApiError(
-                f"خطای HTTP از پنل «{self.panel.name}»:\n"
-                f"HTTP: {response.status_code}\n"
-                f"{response.text[:1000]}"
+                f"خطای HTTP {resp.status_code} از پنل "
+                f"«{self.panel.name}»:\n{text[:1000]}"
             )
 
         try:
-            data = response.json()
+            data = resp.json()
         except Exception:
             raise SanaeiApiError(
-                f"پاسخ JSON نامعتبر از پنل «{self.panel.name}»:\n"
-                f"{response.text[:1000]}"
+                f"پاسخ JSON معتبر نیست:\n{text[:1000]}"
             )
 
-        if isinstance(data, dict) and data.get("success") is False:
+        if not isinstance(data, dict):
+            raise SanaeiApiError(
+                f"فرمت پاسخ پنل نامعتبر است:\n{data}"
+            )
+
+        if data.get("success") is False:
             raise SanaeiApiError(
                 f"خطای پنل «{self.panel.name}»: "
-                f"{data.get('msg') or data.get('message') or data}"
+                f"{data.get('msg', 'خطای نامشخص')}"
             )
 
         return data
-
-    # ==========================================================
-    # INBOUNDS
-    # ==========================================================
 
     async def list_inbounds(self) -> list[dict]:
 
         data = await self._request(
             "GET",
-            "/panel/api/inbounds/list",
+            f"{self.panel.api_base_path}/inbounds/list",
         )
 
-        obj = data.get("obj", [])
+        obj = data.get("obj") or []
 
-        return obj if isinstance(obj, list) else []
+        if isinstance(obj, dict):
+            return obj.get("inbounds", [])
 
-    async def get_inbound(
-        self,
-        inbound_id: int,
-    ) -> dict:
-
-        inbounds = await self.list_inbounds()
-
-        for inbound in inbounds:
-            try:
-                if int(inbound.get("id")) == int(inbound_id):
-                    return inbound
-            except Exception:
-                continue
-
-        raise SanaeiApiError(
-            f"اینباند شماره {inbound_id} روی پنل "
-            f"«{self.panel.name}» پیدا نشد."
-        )
-
-    # ==========================================================
-    # ADD CLIENT
-    #
-    # Endpoint:
-    # POST /panel/api/clients/add
-    #
-    # ساختار API:
-    #
-    # {
-    #   "inbounds": [2],
-    #   "client": {
-    #       "email": "...",
-    #       ...
-    #   }
-    # }
-    #
-    # email = نام کانفیگ انتخاب‌شده توسط کاربر
-    # ==========================================================
+        return obj
 
     async def add_client(
         self,
@@ -150,35 +103,31 @@ class SanaeiClient:
         traffic_gb: int,
         duration_days: int,
         inbound_id: int | None = None,
-        telegram_id: int | None = None,
     ) -> dict:
 
-        inbound_id = (
-            int(inbound_id)
-            if inbound_id is not None
-            else int(self.panel.inbound_id)
-        )
-
         # ------------------------------------------------------
-        # نام کانفیگ
+        # نام کانفیگ = همان چیزی که کاربر وارد کرده
         # ------------------------------------------------------
 
-        email = str(email).strip()
+        email = (email or "").strip()
 
         if not email:
             raise SanaeiApiError(
                 "نام کانفیگ خالی است."
             )
 
-        # ------------------------------------------------------
-        # UUID
-        # ------------------------------------------------------
+        inbound_id = (
+            inbound_id
+            if inbound_id is not None
+            else self.panel.inbound_id
+        )
+
+        if not inbound_id:
+            raise SanaeiApiError(
+                "INBOUND_ID برای این پنل تنظیم نشده است."
+            )
 
         client_uuid = str(uuid.uuid4())
-
-        # ------------------------------------------------------
-        # Expiry
-        # ------------------------------------------------------
 
         expire_ms = int(
             (
@@ -188,105 +137,85 @@ class SanaeiClient:
             * 1000
         )
 
-        # ------------------------------------------------------
-        # Traffic
-        # ------------------------------------------------------
-
         total_bytes = (
-            0
-            if traffic_gb <= 0
-            else int(traffic_gb)
+            traffic_gb
             * 1024
             * 1024
             * 1024
-        )
-
-        # ------------------------------------------------------
-        # Telegram ID
-        # ------------------------------------------------------
-
-        tg_id = (
-            int(telegram_id)
-            if telegram_id is not None
+            if traffic_gb > 0
             else 0
         )
 
         # ------------------------------------------------------
-        # Client
+        # مهم:
+        #
+        # API جدید پنل /clients/add یک Client را داخل
+        # inbound دریافت می‌کند.
+        #
+        # tgId باید عدد باشد، نه string.
         # ------------------------------------------------------
 
         client = {
             "id": client_uuid,
-            "flow": "",
             "email": email,
             "limitIp": 0,
             "totalGB": total_bytes,
             "expiryTime": expire_ms,
             "enable": True,
-            "tgId": tg_id,
+            "tgId": 0,
             "subId": uuid.uuid4().hex[:16],
         }
 
         # ------------------------------------------------------
-        # Payload
+        # API پنل:
         #
-        # توجه:
-        # inbounds باید آرایه‌ای از ID باشد.
-        # client جداگانه ارسال می‌شود.
+        # POST /panel/api/clients/add
+        #
+        # حداقل یکی از inboundها باید داخل درخواست باشد.
         # ------------------------------------------------------
 
         payload = {
             "inbounds": [
-                inbound_id
-            ],
-            "client": client,
+                {
+                    "id": inbound_id,
+                    "client": client,
+                }
+            ]
         }
-
-        print()
-        print("==========================================")
-        print("SANAEI CREATE CLIENT")
-        print("PANEL       :", self.panel.name)
-        print("ENDPOINT    :", "/panel/api/clients/add")
-        print("INBOUND     :", inbound_id)
-        print("EMAIL       :", email)
-        print("UUID        :", client_uuid)
-        print("TRAFFIC GB  :", traffic_gb)
-        print("TRAFFIC BYTE:", total_bytes)
-        print("EXPIRY MS   :", expire_ms)
-        print("TG ID       :", tg_id)
-        print("==========================================")
-        print()
-
-        # ------------------------------------------------------
-        # Create
-        # ------------------------------------------------------
 
         data = await self._request(
             "POST",
-            "/panel/api/clients/add",
+            f"{self.panel.api_base_path}/clients/add",
             json=payload,
         )
 
         # ------------------------------------------------------
-        # Get inbound
+        # اطلاعات inbound را برای ساخت لینک بگیر
         # ------------------------------------------------------
 
-        inbound = await self.get_inbound(
-            inbound_id
+        inbounds = await self.list_inbounds()
+
+        inbound = next(
+            (
+                item
+                for item in inbounds
+                if int(item.get("id", 0)) == int(inbound_id)
+            ),
+            None,
         )
+
+        if inbound is None:
+            raise SanaeiApiError(
+                f"اینباند شماره {inbound_id} روی پنل "
+                f"«{self.panel.name}» پیدا نشد."
+            )
 
         return {
             "client_uuid": client_uuid,
             "email": email,
-            "sub_id": client["subId"],
-            "inbound_id": inbound_id,
             "inbound": inbound,
             "response": data,
         }
-
-    # ==========================================================
-    # TRAFFIC
-    # ==========================================================
 
     async def get_client_traffic(
         self,
@@ -295,14 +224,11 @@ class SanaeiClient:
 
         data = await self._request(
             "GET",
-            f"/panel/api/inbounds/getClientTraffics/{quote(email)}",
+            f"{self.panel.api_base_path}/inbounds/"
+            f"getClientTraffics/{quote(email)}",
         )
 
         return data.get("obj")
-
-    # ==========================================================
-    # DELETE
-    # ==========================================================
 
     async def delete_client(
         self,
@@ -312,20 +238,13 @@ class SanaeiClient:
 
         await self._request(
             "POST",
-            f"/panel/api/inbounds/{inbound_id}/delClient/{client_uuid}",
+            f"{self.panel.api_base_path}/inbounds/"
+            f"{inbound_id}/delClient/{client_uuid}",
         )
-
-    # ==========================================================
-    # CLOSE
-    # ==========================================================
 
     async def close(self) -> None:
         await self._client.aclose()
 
-
-# ==============================================================
-# BUILD CONFIG LINK
-# ==============================================================
 
 def build_config_link(
     panel: PanelConfig,
@@ -334,20 +253,9 @@ def build_config_link(
     email: str,
 ) -> str:
 
-    raw_stream = inbound.get(
-        "streamSettings",
-        "{}",
+    stream_settings = json.loads(
+        inbound.get("streamSettings") or "{}"
     )
-
-    try:
-        if isinstance(raw_stream, str):
-            stream_settings = json.loads(
-                raw_stream or "{}"
-            )
-        else:
-            stream_settings = raw_stream or {}
-    except Exception:
-        stream_settings = {}
 
     network = stream_settings.get(
         "network",
@@ -359,239 +267,152 @@ def build_config_link(
         "none",
     )
 
-    host = (
-        panel.url
-        .split("://")[-1]
-        .split("/")[0]
-        .split(":")[0]
-    )
+    host = panel.url.split("://")[-1].split(":")[0]
 
     port = inbound.get("port")
 
-    if not port:
-        raise SanaeiApiError(
-            "پورت اینباند از پنل دریافت نشد."
-        )
+    remark = quote(
+        f"{panel.name}-{email}"
+    )
 
-    # ==========================================================
+    # ----------------------------------------------------------
     # VLESS
-    # ==========================================================
+    # ----------------------------------------------------------
 
     if panel.protocol.lower() == "vless":
 
         params = [
-            f"type={quote(str(network))}",
-            f"security={quote(str(security))}",
+            f"type={network}",
+            f"security={security}",
         ]
 
         if security == "tls":
-
-            tls = (
-                stream_settings.get(
-                    "tlsSettings",
-                    {},
-                )
-                or {}
-            )
-
-            server_name = tls.get(
-                "serverName"
-            ) or host
-
             params.append(
-                "sni=" + quote(str(server_name))
+                "sni=" + quote(host)
             )
-
-        if network == "ws":
-
-            ws = (
-                stream_settings.get(
-                    "wsSettings",
-                    {},
-                )
-                or {}
-            )
-
-            path = ws.get(
-                "path",
-                "/",
-            )
-
-            headers = (
-                ws.get(
-                    "headers",
-                    {},
-                )
-                or {}
-            )
-
-            params.append(
-                "path="
-                + quote(
-                    str(path),
-                    safe="",
-                )
-            )
-
-            ws_host = headers.get("Host")
-
-            if ws_host:
-                params.append(
-                    "host="
-                    + quote(str(ws_host))
-                )
 
         if security == "reality":
 
-            reality = (
-                stream_settings.get(
-                    "realitySettings",
-                    {},
-                )
-                or {}
+            reality = stream_settings.get(
+                "realitySettings",
+                {},
             )
 
-            reality_settings = (
-                reality.get(
-                    "settings",
-                    {},
-                )
-                or {}
-            )
-
-            public_key = reality_settings.get(
-                "publicKey",
-                "",
-            )
-
-            fingerprint = reality_settings.get(
-                "fingerprint",
-                "chrome",
-            )
-
-            spider_x = reality_settings.get(
-                "spiderX",
-                "",
-            )
-
-            server_names = (
-                reality.get(
-                    "serverNames",
-                    [],
-                )
-                or []
-            )
-
-            short_ids = (
-                reality.get(
-                    "shortIds",
-                    [],
-                )
-                or []
-            )
-
-            if public_key:
-                params.append(
-                    "pbk="
-                    + quote(str(public_key))
-                )
-
-            params.append(
-                "fp="
-                + quote(str(fingerprint))
+            server_names = reality.get(
+                "serverNames",
+                [],
             )
 
             if server_names:
                 params.append(
-                    "sni="
-                    + quote(
-                        str(server_names[0])
-                    )
+                    "sni=" + quote(server_names[0])
                 )
+
+            short_ids = reality.get(
+                "shortIds",
+                [],
+            )
 
             if short_ids:
                 params.append(
-                    "sid="
-                    + quote(
-                        str(short_ids[0])
+                    "sid=" + quote(short_ids[0])
+                )
+
+        if network == "ws":
+
+            ws_settings = stream_settings.get(
+                "wsSettings",
+                {},
+            )
+
+            path = ws_settings.get(
+                "path",
+                "/",
+            )
+
+            params.append(
+                "path=" + quote(
+                    path,
+                    safe="",
+                )
+            )
+
+            headers = ws_settings.get(
+                "headers",
+                {},
+            )
+
+            host_header = headers.get(
+                "Host"
+            )
+
+            if host_header:
+                params.append(
+                    "host=" + quote(
+                        host_header
                     )
                 )
 
-            if spider_x:
+        if network == "grpc":
+
+            grpc_settings = stream_settings.get(
+                "grpcSettings",
+                {},
+            )
+
+            service_name = grpc_settings.get(
+                "serviceName",
+                "",
+            )
+
+            if service_name:
                 params.append(
-                    "spx="
-                    + quote(
-                        str(spider_x),
-                        safe="",
-                    )
+                    "serviceName="
+                    + quote(service_name)
                 )
 
         query = "&".join(params)
 
-        remark = quote(
-            f"{panel.name}-{email}"
-        )
-
         return (
-            f"vless://"
-            f"{client_uuid}"
+            f"vless://{client_uuid}"
             f"@{host}:{port}"
             f"?{query}"
             f"#{remark}"
         )
 
-    # ==========================================================
+    # ----------------------------------------------------------
     # VMESS
-    # ==========================================================
+    # ----------------------------------------------------------
 
-    vmess = {
+    import base64
+
+    vmess_obj = {
         "v": "2",
         "ps": f"{panel.name}-{email}",
         "add": host,
         "port": port,
         "id": client_uuid,
         "aid": "0",
-        "scy": "auto",
         "net": network,
         "type": "none",
         "host": "",
-        "path": "",
-        "tls": "",
+        "path": stream_settings.get(
+            "wsSettings",
+            {},
+        ).get(
+            "path",
+            "",
+        ),
+        "tls": (
+            "tls"
+            if security in ("tls", "reality")
+            else ""
+        ),
     }
 
-    if network == "ws":
-
-        ws = (
-            stream_settings.get(
-                "wsSettings",
-                {},
-            )
-            or {}
-        )
-
-        vmess["path"] = ws.get(
-            "path",
-            "/",
-        )
-
-        headers = (
-            ws.get(
-                "headers",
-                {},
-            )
-            or {}
-        )
-
-        vmess["host"] = headers.get(
-            "Host",
-            "",
-        )
-
-    if security == "tls":
-        vmess["tls"] = "tls"
-
     raw = json.dumps(
-        vmess,
+        vmess_obj,
+        ensure_ascii=False,
         separators=(",", ":"),
     ).encode()
 
