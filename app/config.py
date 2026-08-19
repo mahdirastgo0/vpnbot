@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+
 load_dotenv(".env")
 load_dotenv("panel.env", override=False)
 load_dotenv("plans.env", override=False)
@@ -56,22 +57,33 @@ def _get_int_list(key: str) -> list[int]:
     return result
 
 
+# ==========================================================
+# PANEL
+# ==========================================================
+
 @dataclass
 class PanelConfig:
     key: str
     name: str
     url: str
 
+    # لاگین خود پنل 3x-ui
     username: str
     password: str
 
+    # مسیر API
+    api_base_path: str
+
+    # اینباند
     inbound_id: int
 
+    # پروتکل
     protocol: str = "vless"
 
-    # مسیر API پنل
-    api_base_path: str = "/panel/api"
 
+# ==========================================================
+# PLAN
+# ==========================================================
 
 @dataclass
 class PlanConfig:
@@ -79,30 +91,16 @@ class PlanConfig:
     panel_key: str
     plan_type: str
     name: str
-
     duration_days: int
     traffic_gb: int
     price: int
-
     is_active: bool
-
     description: str = ""
 
 
-@dataclass
-class CryptoWallets:
-    usdt_trc20: str
-    usdt_bep20: str
-    btc: str
-    ton: str
-
-    def active_wallets(self) -> dict[str, str]:
-        return {
-            key: value
-            for key, value in self.__dict__.items()
-            if value
-        }
-
+# ==========================================================
+# PANELS
+# ==========================================================
 
 def _load_panels() -> dict[str, PanelConfig]:
 
@@ -142,6 +140,11 @@ def _load_panels() -> dict[str, PanelConfig]:
                 required=True,
             ),
 
+            api_base_path=_get(
+                prefix + "API_BASE_PATH",
+                "/panel/api",
+            ).rstrip("/"),
+
             inbound_id=int(
                 _get(
                     prefix + "INBOUND_ID",
@@ -153,15 +156,14 @@ def _load_panels() -> dict[str, PanelConfig]:
                 prefix + "PROTOCOL",
                 "vless",
             ).strip().lower(),
-
-            api_base_path=_get(
-                prefix + "API_BASE_PATH",
-                "/panel/api",
-            ).rstrip("/"),
         )
 
     return panels
 
+
+# ==========================================================
+# PLANS
+# ==========================================================
 
 def _load_plans() -> dict[str, PlanConfig]:
 
@@ -192,8 +194,7 @@ def _load_plans() -> dict[str, PlanConfig]:
             "TUNNEL",
         ):
             raise RuntimeError(
-                f"نوع پلن «{plan_type}» برای "
-                f"PLAN_{key} نامعتبر است. "
+                f"نوع پلن «{plan_type}» برای PLAN_{key} نامعتبر است. "
                 f"فقط DIRECT یا TUNNEL مجاز است."
             )
 
@@ -248,9 +249,31 @@ def _load_plans() -> dict[str, PlanConfig]:
     return plans
 
 
+# ==========================================================
+# CRYPTO
+# ==========================================================
+
+@dataclass
+class CryptoWallets:
+
+    usdt_trc20: str
+    usdt_bep20: str
+    btc: str
+    ton: str
+
+    def active_wallets(self) -> dict[str, str]:
+
+        return {
+            key: value
+            for key, value in self.__dict__.items()
+            if value
+        }
+
+
 def _load_crypto_wallets() -> CryptoWallets:
 
     return CryptoWallets(
+
         usdt_trc20=_get(
             "CRYPTO_USDT_TRC20_ADDRESS"
         ),
@@ -269,11 +292,15 @@ def _load_crypto_wallets() -> CryptoWallets:
     )
 
 
+# ==========================================================
+# SETTINGS
+# ==========================================================
+
 class Settings:
 
-    # =========================================================
+    # ------------------------------------------------------
     # BOT
-    # =========================================================
+    # ------------------------------------------------------
 
     BOT_TOKEN: str = _get(
         "BOT_TOKEN",
@@ -297,9 +324,9 @@ class Settings:
         "FORCE_JOIN_CHANNEL_USERNAME"
     )
 
-    # =========================================================
+    # ------------------------------------------------------
     # DATABASE
-    # =========================================================
+    # ------------------------------------------------------
 
     DB_HOST: str = _get(
         "DB_HOST",
@@ -331,16 +358,14 @@ class Settings:
 
         return (
             "postgresql+asyncpg://"
-            f"{self.DB_USER}:"
-            f"{self.DB_PASSWORD}@"
-            f"{self.DB_HOST}:"
-            f"{self.DB_PORT}/"
-            f"{self.DB_NAME}"
+            f"{self.DB_USER}:{self.DB_PASSWORD}"
+            f"@{self.DB_HOST}:{self.DB_PORT}"
+            f"/{self.DB_NAME}"
         )
 
-    # =========================================================
+    # ------------------------------------------------------
     # ZARINPAL
-    # =========================================================
+    # ------------------------------------------------------
 
     ZARINPAL_MERCHANT_ID: str = _get(
         "ZARINPAL_MERCHANT_ID",
@@ -369,9 +394,9 @@ class Settings:
         )
     )
 
-    # =========================================================
+    # ------------------------------------------------------
     # CARD TO CARD
-    # =========================================================
+    # ------------------------------------------------------
 
     CARD_NUMBER: str = _get(
         "CARD_NUMBER"
@@ -385,23 +410,22 @@ class Settings:
         "CARD_BANK_NAME"
     )
 
-    # =========================================================
+    # ------------------------------------------------------
     # CURRENCY
-    # =========================================================
+    # ------------------------------------------------------
 
     CURRENCY_LABEL: str = _get(
         "CURRENCY_LABEL",
         "تومان",
     )
 
-    # =========================================================
-    # PANELS / PLANS
-    # =========================================================
-
-    PANELS: dict[str, PanelConfig]
-    PLANS: dict[str, PlanConfig]
+    # ------------------------------------------------------
+    # PANELS / PLANS / CRYPTO
+    # ------------------------------------------------------
 
     CRYPTO_WALLETS: CryptoWallets
+    PANELS: dict[str, PanelConfig]
+    PLANS: dict[str, PlanConfig]
 
     def __init__(self) -> None:
 
