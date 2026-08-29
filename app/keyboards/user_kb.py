@@ -123,7 +123,7 @@ def payment_methods_kb(
     rows = [
         [
             InlineKeyboardButton(
-                text="💳 زرین‌پال (آنلاین)",
+                text="💳 زرین‌پال (غیر فعال)",
                 callback_data=f"pay:zarinpal:{plan_id}",
             )
         ],
