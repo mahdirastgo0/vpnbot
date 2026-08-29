@@ -8,7 +8,6 @@ class BuyFlow(StatesGroup):
 
 
 class AdminPlanFlow(StatesGroup):
-    # افزودن سرویس
     waiting_panel = State()
     waiting_type = State()
     waiting_name = State()
@@ -16,7 +15,6 @@ class AdminPlanFlow(StatesGroup):
     waiting_traffic = State()
     waiting_price = State()
 
-    # ویرایش سرویس
     waiting_edit_name = State()
     waiting_edit_duration = State()
     waiting_edit_traffic = State()
