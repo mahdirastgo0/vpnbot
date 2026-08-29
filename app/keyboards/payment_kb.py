@@ -12,7 +12,7 @@ def payment_methods_kb(plan_id: int) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="💰 زرین‌پال",
+                    text="💰(غیر فعال) زرین‌پال",
                     callback_data=f"pay:zarinpal:{plan_id}",
                 ),
             ],
