@@ -7,8 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database.models import Plan
-from app.database.crud import get_plan
+from app.database.models import Plan, PaymentMethod, OrderStatus
+from app.database.crud import get_plan, get_or_create_user, create_order
 from app.keyboards.user_kb import (
     panels_kb,
     plans_kb,
@@ -17,11 +17,97 @@ from app.keyboards.user_kb import (
 )
 from app.states.buy import BuyFlow
 from app.utils import texts
+from app.services.delivery import provision_and_deliver
 
 
 router = Router(name="user_buy")
 
+# ============================================================
+# 🎁 سرویس تست رایگان
+# ============================================================
 
+@router.message(F.text == "🎁 سرویس تست رایگان")
+async def free_trial(
+    message: Message,
+    session: AsyncSession,
+) -> None:
+
+    user = await get_or_create_user(
+        session,
+        telegram_id=message.from_user.id,
+        username=message.from_user.username,
+        full_name=message.from_user.full_name,
+    )
+
+    # قبلاً تست گرفته
+    if user.trial_used:
+        await message.answer(
+            "❌ شما قبلاً سرویس تست رایگان خود را دریافت کرده‌اید."
+        )
+        return
+
+    # پیدا کردن پلن تست فعال
+    result = await session.execute(
+        select(Plan)
+        .where(
+            Plan.is_trial.is_(True),
+            Plan.is_active.is_(True),
+        )
+        .order_by(Plan.id.asc())
+        .limit(1)
+    )
+
+    plan = result.scalar_one_or_none()
+
+    if plan is None:
+        await message.answer(
+            "❌ در حال حاضر سرویس تست رایگان موجود نیست."
+        )
+        return
+
+    # بررسی پنل
+    panel = settings.PANELS.get(plan.panel_key)
+
+    if panel is None:
+        await message.answer(
+            "❌ سرور سرویس تست در دسترس نیست."
+        )
+        return
+
+    # ساخت سفارش تست
+    order = await create_order(
+        session=session,
+        user=user,
+        plan=plan,
+        payment_method=PaymentMethod.TRIAL,
+        config_name=f"Trial-{message.from_user.id}",
+    )
+
+    # تست رایگان نیازی به پرداخت ندارد
+    order.status = OrderStatus.PAID
+    await session.commit()
+
+    try:
+        await provision_and_deliver(
+            bot=message.bot,
+            session=session,
+            order=order,
+        )
+
+        # فقط بعد از ساخت موفق کانفیگ، تست مصرف‌شده شود
+        user.trial_used = True
+        await session.commit()
+
+    except Exception as e:
+        # اگر ساخت کانفیگ شکست خورد، تست کاربر نسوزد
+        await session.rollback()
+
+        await message.answer(
+            "❌ متأسفانه ساخت سرویس تست انجام نشد.\n"
+            "لطفاً چند لحظه بعد دوباره تلاش کنید."
+        )
+
+        print(f"TRIAL PROVISION ERROR: {e}")
 # ============================================================
 # 🛒 خرید سرویس
 # ============================================================
