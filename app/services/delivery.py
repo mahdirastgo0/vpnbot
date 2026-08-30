@@ -49,36 +49,23 @@ async def provision_and_deliver(
 
         expire_at = datetime.now(timezone.utc) + timedelta(days=plan.duration_days)
 
-        vpn_config = order.vpn_config
-        if vpn_config is None:
-            vpn_config = VpnConfig(
-                order_id=order.id,
-                user_id=user.id,
-                panel_key=panel.key,
-                plan_type=plan.plan_type,
-                plan_name=plan.name,
-                config_name=email,
-                inbound_id=panel.inbound_id,
-                client_email=email,
-                client_uuid=client_uuid,
-                config_link=subscription_link,
-                traffic_gb=plan.traffic_gb,
-                expire_at=expire_at,
-                subscription_link=subscription_link,
-            )
-            session.add(vpn_config)
-        else:
-            vpn_config.panel_key = panel.key
-            vpn_config.plan_type = plan.plan_type
-            vpn_config.plan_name = plan.name
-            vpn_config.config_name = email
-            vpn_config.inbound_id = panel.inbound_id
-            vpn_config.client_email = email
-            vpn_config.client_uuid = client_uuid
-            vpn_config.config_link = subscription_link
-            vpn_config.traffic_gb = plan.traffic_gb
-            vpn_config.expire_at = expire_at
-            vpn_config.subscription_link = subscription_link
+        vpn_config = VpnConfig(
+            order_id=order.id,
+            user_id=user.id,
+            panel_key=panel.key,
+            plan_type=plan.plan_type,
+            plan_name=plan.name,
+            config_name=email,
+            inbound_id=panel.inbound_id,
+            client_email=email,
+            client_uuid=client_uuid,
+            config_link=subscription_link,
+            traffic_gb=plan.traffic_gb,
+            expire_at=expire_at,
+            subscription_link=subscription_link,
+        )
+
+        session.add(vpn_config)
 
         await session.commit()
 
