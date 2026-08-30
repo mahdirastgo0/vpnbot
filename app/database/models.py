@@ -15,8 +15,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+
 class Base(DeclarativeBase):
     pass
+
 
 class UserTrial(Base):
     __tablename__ = "user_trials"
@@ -25,37 +27,9 @@ class UserTrial(Base):
         UniqueConstraint(
             "user_id",
             "panel_key",
-            name="uq_user_trial_panel",
+            name="uq_user_trial_user_panel",
         ),
     )
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-    )
-
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"),
-        index=True,
-    )
-
-    panel_key: Mapped[str] = mapped_column(
-        String(32),
-        index=True,
-    )
-
-    used: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        nullable=False,
-        server_default="false",
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-    )
-    __tablename__ = "user_trials"
 
     id: Mapped[int] = mapped_column(
         Integer,

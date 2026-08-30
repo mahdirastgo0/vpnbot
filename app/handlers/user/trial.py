@@ -5,9 +5,17 @@ from aiogram.types import Message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import User, Plan
+from app.database.models import (
+    User,
+    Plan,
+    UserTrial,
+    Order,
+    OrderStatus,
+    PaymentMethod,
+)
 from app.database.crud import get_or_create_user
 from app.services.delivery import provision_and_deliver
+
 
 router = Router(name="trial")
 
@@ -25,42 +33,157 @@ async def get_free_trial(
         full_name=message.from_user.full_name,
     )
 
-    # قبلاً تست گرفته؟
-    if user.trial_used:
-        await message.answer(
-            "❌ شما قبلاً سرویس تست رایگان خود را دریافت کرده‌اید.\n\n"
-            "هر کاربر فقط یک بار می‌تواند از سرویس تست استفاده کند."
-        )
-        return
+    # ------------------------------------------------------
+    # پیدا کردن تمام پلن‌های تست فعال
+    # ------------------------------------------------------
 
-    # پیدا کردن پلن تست
     result = await session.execute(
         select(Plan)
         .where(
             Plan.is_trial.is_(True),
             Plan.is_active.is_(True),
         )
-        .limit(1)
+        .order_by(Plan.id.asc())
     )
 
-    plan = result.scalar_one_or_none()
+    trial_plans = list(result.scalars().all())
 
-    if plan is None:
+    if not trial_plans:
         await message.answer(
-            "❌ در حال حاضر سرویس تست رایگان در دسترس نیست."
+            "❌ در حال حاضر هیچ سرویس تست رایگانی در دسترس نیست."
         )
         return
 
-    # جلوگیری از درخواست همزمان / دوباره
-    user.trial_used = True
-    await session.commit()
+    # ------------------------------------------------------
+    # فعلاً اگر چند پنل تست داریم، لیست پنل‌ها را نشان بده
+    # ------------------------------------------------------
 
-    # ساخت سفارش رایگان
-    from app.database.models import (
-        Order,
-        OrderStatus,
-        PaymentMethod,
+    available_plans = []
+
+    for plan in trial_plans:
+
+        result = await session.execute(
+            select(UserTrial)
+            .where(
+                UserTrial.user_id == user.id,
+                UserTrial.panel_key == plan.panel_key,
+                UserTrial.used.is_(True),
+            )
+        )
+
+        used_trial = result.scalar_one_or_none()
+
+        if used_trial is None:
+            available_plans.append(plan)
+
+    # ------------------------------------------------------
+    # کاربر همه تست‌ها را گرفته
+    # ------------------------------------------------------
+
+    if not available_plans:
+        await message.answer(
+            "❌ شما قبلاً تست رایگان تمام سرورها را دریافت کرده‌اید.\n\n"
+            "هر کاربر برای هر سرور فقط یک بار می‌تواند تست بگیرد."
+        )
+        return
+
+    # ------------------------------------------------------
+    # اگر فقط یک پنل تست داریم، مستقیم همان را بده
+    # ------------------------------------------------------
+
+    if len(available_plans) == 1:
+
+        plan = available_plans[0]
+
+        await create_trial(
+            message=message,
+            session=session,
+            user=user,
+            plan=plan,
+        )
+
+        return
+
+    # ------------------------------------------------------
+    # چند پنل تست داریم
+    # ------------------------------------------------------
+
+    text = (
+        "🎁 <b>سرویس‌های تست رایگان</b>\n\n"
+        "برای هر سرور یک بار امکان دریافت تست دارید.\n\n"
     )
+
+    for plan in available_plans:
+
+        traffic = (
+            f"{plan.traffic_mb} MB"
+            if plan.traffic_mb
+            else f"{plan.traffic_gb} GB"
+        )
+
+        text += (
+            f"🌐 <b>{plan.panel_key}</b>\n"
+            f"📦 {traffic}\n"
+            f"⏳ {plan.duration_days} روز\n\n"
+        )
+
+    # ------------------------------------------------------
+    # فعلاً انتخاب خودکار اولین تست موجود
+    # ------------------------------------------------------
+
+    plan = available_plans[0]
+
+    await create_trial(
+        message=message,
+        session=session,
+        user=user,
+        plan=plan,
+    )
+
+
+async def create_trial(
+    message: Message,
+    session: AsyncSession,
+    user: User,
+    plan: Plan,
+) -> None:
+
+    # ------------------------------------------------------
+    # بررسی دوباره برای جلوگیری از درخواست همزمان
+    # ------------------------------------------------------
+
+    result = await session.execute(
+        select(UserTrial)
+        .where(
+            UserTrial.user_id == user.id,
+            UserTrial.panel_key == plan.panel_key,
+            UserTrial.used.is_(True),
+        )
+    )
+
+    if result.scalar_one_or_none() is not None:
+        await message.answer(
+            "❌ شما قبلاً تست این سرور را دریافت کرده‌اید."
+        )
+        return
+
+    # ------------------------------------------------------
+    # ساخت رکورد Trial
+    # ------------------------------------------------------
+
+    trial = UserTrial(
+        user_id=user.id,
+        panel_key=plan.panel_key,
+        used=False,
+    )
+
+    session.add(trial)
+
+    await session.flush()
+
+    # ------------------------------------------------------
+    # ساخت سفارش رایگان
+    # ------------------------------------------------------
 
     order = Order(
         user_id=user.id,
@@ -68,38 +191,46 @@ async def get_free_trial(
         amount=0,
         payment_method=PaymentMethod.TRIAL,
         status=OrderStatus.PAID,
-        config_name=f"Trial-{message.from_user.id}",
+        config_name=f"Trial-{plan.panel_key}-{message.from_user.id}",
     )
 
     session.add(order)
+
     await session.commit()
+
     await session.refresh(order)
 
-    # بارگذاری relationshipها
-    result = await session.execute(
-        select(Order)
-        .where(Order.id == order.id)
-    )
-
-    order = result.scalar_one()
-
-    # relationshipها را دستی بارگذاری می‌کنیم
+    # relationshipهای لازم
     order.plan = plan
     order.user = user
 
+    # ------------------------------------------------------
+    # ساخت کانفیگ
+    # ------------------------------------------------------
+
     try:
+
         await provision_and_deliver(
-            message.bot,
-            session,
-            order,
+            bot=message.bot,
+            session=session,
+            order=order,
         )
 
-    except Exception:
-        # اگر ساخت کانفیگ شکست خورد، امکان دریافت مجدد را آزاد کن
-        user.trial_used = False
+        # --------------------------------------------------
+        # فقط بعد از موفقیت ساخت کانفیگ، تست مصرف شود
+        # --------------------------------------------------
+
+        trial.used = True
+
         await session.commit()
 
+    except Exception as e:
+
+        await session.rollback()
+
         await message.answer(
-            "⚠️ در ساخت سرویس تست مشکلی پیش آمد.\n"
+            "❌ متأسفانه ساخت سرویس تست انجام نشد.\n"
             "لطفاً چند لحظه بعد دوباره تلاش کنید."
         )
+
+        print(f"TRIAL PROVISION ERROR: {e}")
