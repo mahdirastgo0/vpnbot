@@ -94,8 +94,6 @@ async def provision_and_deliver(
             else "🎉 <b>خرید شما با موفقیت انجام شد!</b>"
         )
         text = (
-            text = (
-            f"{title}\n\n"
             "🎉 <b>خرید شما با موفقیت انجام شد!</b>\n\n"
             f"📦 <b>پلن:</b> {plan.name}\n"
             f"🌐 <b>سرور:</b> {panel.name}\n"
@@ -109,7 +107,11 @@ async def provision_and_deliver(
             "Subscription و کانفیگ‌های تکی را دریافت کنید."
         )
 
-        await bot.send_message(user.telegram_id, text, parse_mode="HTML")
+        await bot.send_message(
+            user.telegram_id,
+            text,
+            parse_mode="HTML",
+        )
 
     finally:
         await client.close()
