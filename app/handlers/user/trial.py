@@ -3,7 +3,9 @@ from __future__ import annotations
 import uuid
 
 from aiogram import F, Router
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +25,7 @@ router = Router(name="trial")
 
 
 # ============================================================
-# 🎁 سرویس تست رایگان
+# 🎁 نمایش تست‌های رایگان
 # ============================================================
 
 @router.message(F.text == "🎁 سرویس تست رایگان")
@@ -32,10 +34,6 @@ async def get_free_trial(
     session: AsyncSession,
 ) -> None:
 
-    # --------------------------------------------------------
-    # پیدا کردن / ساخت کاربر
-    # --------------------------------------------------------
-
     user = await get_or_create_user(
         session,
         telegram_id=message.from_user.id,
@@ -43,13 +41,10 @@ async def get_free_trial(
         full_name=message.from_user.full_name,
     )
 
-    # مقادیر ساده را قبل از commit/rollback ذخیره می‌کنیم
-    # تا بعداً باعث MissingGreenlet نشوند.
     user_id = user.id
-    telegram_id = user.telegram_id
 
     # --------------------------------------------------------
-    # پیدا کردن پلن‌های تست فعال
+    # پیدا کردن تمام پلن‌های تست فعال
     # --------------------------------------------------------
 
     result = await session.execute(
@@ -61,93 +56,163 @@ async def get_free_trial(
         .order_by(Plan.id.asc())
     )
 
-    plans = result.scalars().all()
-
-    print(
-        "TRIAL DEBUG:",
-        "user_id=", user_id,
-        "telegram_id=", telegram_id,
-        "plans=",
-        [
-            (
-                p.id,
-                p.panel_key,
-                p.is_trial,
-                p.is_active,
-            )
-            for p in plans
-        ],
-    )
+    plans = list(result.scalars().all())
 
     if not plans:
         await message.answer(
-            "❌ در حال حاضر هیچ سرویس تستی در دسترس نیست."
+            "❌ در حال حاضر هیچ سرویس تست رایگانی در دسترس نیست."
         )
         return
 
     # --------------------------------------------------------
-    # پیدا کردن اولین پنلی که کاربر هنوز تست آن را نگرفته
+    # ساخت دکمه‌ها
     # --------------------------------------------------------
 
-    plan = None
+    builder = InlineKeyboardBuilder()
 
-    for candidate in plans:
+    for plan in plans:
 
-        result = await session.execute(
-            select(UserTrial).where(
-                UserTrial.user_id == user_id,
-                UserTrial.panel_key == candidate.panel_key,
-                UserTrial.used.is_(True),
-            )
+        # نام نمایشی سرور
+        if plan.panel_key == "ir1":
+            server_name = "🇮🇷 ایران - تانل"
+
+        elif plan.panel_key == "pol":
+            server_name = "🇵🇱 لهستان - مستقیم"
+
+        else:
+            server_name = f"🌐 {plan.panel_key}"
+
+        # حجم
+        if plan.traffic_mb:
+            traffic = f"{plan.traffic_mb} MB"
+        elif plan.traffic_gb > 0:
+            traffic = f"{plan.traffic_gb} GB"
+        else:
+            traffic = "نامحدود"
+
+        builder.button(
+            text=f"{server_name} | {traffic} | {plan.duration_days} روز",
+            callback_data=f"trial:{plan.id}",
         )
 
-        already_used = result.scalar_one_or_none()
+    builder.adjust(1)
 
-        print(
-            "TRIAL CHECK:",
-            "user_id=", user_id,
-            "panel=", candidate.panel_key,
-            "already_used=", already_used,
+    await message.answer(
+        "🎁 <b>سرویس تست رایگان</b>\n\n"
+        "سرور موردنظر خود را برای تست انتخاب کنید:\n\n"
+        "هر سرور را فقط یک بار می‌توانید تست کنید.",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(),
+    )
+
+
+# ============================================================
+# 🎯 انتخاب تست توسط کاربر
+# ============================================================
+
+@router.callback_query(F.data.startswith("trial:"))
+async def select_trial(
+    callback: CallbackQuery,
+    session: AsyncSession,
+) -> None:
+
+    await callback.answer()
+
+    # --------------------------------------------------------
+    # دریافت plan_id
+    # --------------------------------------------------------
+
+    try:
+        plan_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.message.answer(
+            "❌ درخواست نامعتبر است."
         )
-
-        if already_used is None:
-            plan = candidate
-            break
+        return
 
     # --------------------------------------------------------
-    # همه تست‌ها استفاده شده‌اند
+    # پیدا کردن کاربر
     # --------------------------------------------------------
+
+    user = await get_or_create_user(
+        session,
+        telegram_id=callback.from_user.id,
+        username=callback.from_user.username,
+        full_name=callback.from_user.full_name,
+    )
+
+    user_id = user.id
+    telegram_id = user.telegram_id
+
+    # --------------------------------------------------------
+    # پیدا کردن پلن انتخاب‌شده
+    # --------------------------------------------------------
+
+    result = await session.execute(
+        select(Plan).where(
+            Plan.id == plan_id,
+            Plan.is_trial.is_(True),
+            Plan.is_active.is_(True),
+        )
+    )
+
+    plan = result.scalar_one_or_none()
 
     if plan is None:
-        await message.answer(
-            "❌ شما تست رایگان تمام سرورها را قبلاً دریافت کرده‌اید."
+        await callback.message.answer(
+            "❌ این سرویس تست دیگر در دسترس نیست."
         )
         return
 
-    # مقادیر ساده پلن را هم ذخیره می‌کنیم
-    plan_id = plan.id
     panel_key = plan.panel_key
     plan_name = plan.name
 
     # --------------------------------------------------------
-    # نمایش اطلاعات تست
+    # بررسی اینکه کاربر قبلاً همین سرور را تست کرده یا نه
     # --------------------------------------------------------
 
-    traffic_text = (
-        f"{plan.traffic_mb} مگابایت"
-        if plan.traffic_mb
-        else (
-            "نامحدود"
-            if plan.traffic_gb <= 0
-            else f"{plan.traffic_gb} گیگابایت"
+    result = await session.execute(
+        select(UserTrial).where(
+            UserTrial.user_id == user_id,
+            UserTrial.panel_key == panel_key,
+            UserTrial.used.is_(True),
         )
     )
 
-    await message.answer(
-        "⏳ در حال ساخت سرویس تست رایگان شما...\n\n"
+    already_used = result.scalar_one_or_none()
+
+    print(
+        "TRIAL SELECT:",
+        "user_id=", user_id,
+        "plan_id=", plan_id,
+        "panel=", panel_key,
+        "already_used=", already_used,
+    )
+
+    if already_used is not None:
+        await callback.message.answer(
+            f"❌ شما قبلاً سرویس تست سرور {panel_key} را دریافت کرده‌اید.\n\n"
+            "می‌توانید سرور دیگری را برای تست انتخاب کنید."
+        )
+        return
+
+    # --------------------------------------------------------
+    # نمایش وضعیت
+    # --------------------------------------------------------
+
+    if plan.traffic_mb:
+        traffic_text = f"{plan.traffic_mb} مگابایت"
+    elif plan.traffic_gb > 0:
+        traffic_text = f"{plan.traffic_gb} گیگابایت"
+    else:
+        traffic_text = "نامحدود"
+
+    await callback.message.answer(
+        "⏳ <b>در حال ساخت سرویس تست شما...</b>\n\n"
         f"🌐 سرور: {panel_key}\n"
         f"📦 حجم: {traffic_text}\n"
-        f"⏱ مدت: {plan.duration_days} روز"
+        f"⏱ مدت: {plan.duration_days} روز",
+        parse_mode="HTML",
     )
 
     # --------------------------------------------------------
@@ -184,7 +249,7 @@ async def get_free_trial(
     await session.refresh(order)
 
     # --------------------------------------------------------
-    # relationshipها
+    # Relationshipها را دستی تنظیم می‌کنیم
     # --------------------------------------------------------
 
     order.user = user
@@ -197,15 +262,12 @@ async def get_free_trial(
     try:
 
         await provision_and_deliver(
-            bot=message.bot,
+            bot=callback.bot,
             session=session,
             order=order,
         )
 
     except Exception as e:
-
-        # ذخیره مقادیر قبل از rollback انجام شده،
-        # بنابراین اینجا دیگر به ORM نیاز نداریم.
 
         await session.rollback()
 
@@ -213,11 +275,12 @@ async def get_free_trial(
             "TRIAL PROVISION ERROR:",
             f"user={user_id}",
             f"panel={panel_key}",
+            f"plan={plan_name}",
             f"config={config_name}",
             f"error={e}",
         )
 
-        await message.answer(
+        await callback.message.answer(
             "❌ متأسفانه ساخت سرویس تست انجام نشد.\n\n"
             "لطفاً چند لحظه بعد دوباره تلاش کنید."
         )
@@ -225,8 +288,8 @@ async def get_free_trial(
         return
 
     # --------------------------------------------------------
-    # ساخت موفق بوده است
-    # حالا تست را مصرف‌شده ثبت می‌کنیم
+    # ثبت مصرف تست
+    # فقط بعد از موفقیت ساخت کانفیگ
     # --------------------------------------------------------
 
     try:
