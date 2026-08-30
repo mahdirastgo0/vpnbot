@@ -183,11 +183,3 @@ async def show_config(
 
     await callback.answer()
 
-
-# ---------- هندلر پیش‌فرض برای کال‌بک‌های ناشناخته ----------
-# باید همیشه آخرین هندلر ثبت‌شده در این روتر باشد،
-# چون بدون فیلتره و هر کال‌بکی رو قبل از رسیدن به هندلرهای
-# پایین‌ترش قاپ می‌زنه.
-@router.callback_query()
-async def unknown_callback(callback: CallbackQuery):
-    await callback.answer("این گزینه در دسترس نیست.", show_alert=True)
