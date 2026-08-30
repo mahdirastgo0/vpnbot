@@ -221,27 +221,28 @@ async def get_free_trial(
 # 🎯 انتخاب سرور تست
 # ============================================================
 
-@router.callback_query(
-    F.data.startswith("trial_select:")
-)
+@router.callback_query()
 async def select_trial(
     callback: CallbackQuery,
     session: AsyncSession,
 ) -> None:
 
     print(
-        "========== TRIAL CALLBACK =========="
+        "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
     )
-
     print(
-        "CALLBACK DATA:",
-        callback.data,
+        "ANY CALLBACK RECEIVED:",
+        repr(callback.data),
     )
-
     print(
-        "TELEGRAM ID:",
+        "FROM USER:",
         callback.from_user.id,
     )
+    print(
+        "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    )
+
+    await callback.answer("Callback دریافت شد")
 
     # --------------------------------------------------------
     # استخراج plan_id
