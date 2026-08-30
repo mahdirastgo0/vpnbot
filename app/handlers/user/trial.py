@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from aiogram import F, Router
 from aiogram.types import Message
 from sqlalchemy import select
@@ -30,6 +32,10 @@ async def get_free_trial(
     session: AsyncSession,
 ) -> None:
 
+    # --------------------------------------------------------
+    # پیدا کردن / ساخت کاربر
+    # --------------------------------------------------------
+
     user = await get_or_create_user(
         session,
         telegram_id=message.from_user.id,
@@ -37,8 +43,13 @@ async def get_free_trial(
         full_name=message.from_user.full_name,
     )
 
+    # مقادیر ساده را قبل از commit/rollback ذخیره می‌کنیم
+    # تا بعداً باعث MissingGreenlet نشوند.
+    user_id = user.id
+    telegram_id = user.telegram_id
+
     # --------------------------------------------------------
-    # پیدا کردن اولین پلن تست فعال
+    # پیدا کردن پلن‌های تست فعال
     # --------------------------------------------------------
 
     result = await session.execute(
@@ -53,19 +64,20 @@ async def get_free_trial(
     plans = result.scalars().all()
 
     print(
-    "TRIAL DEBUG:",
-    "user_id=", user.id,
-    "telegram_id=", user.telegram_id,
-    "plans=", [
-        (
-            p.id,
-            p.panel_key,
-            p.is_trial,
-            p.is_active,
-        )
-        for p in plans
-    ],
-)
+        "TRIAL DEBUG:",
+        "user_id=", user_id,
+        "telegram_id=", telegram_id,
+        "plans=",
+        [
+            (
+                p.id,
+                p.panel_key,
+                p.is_trial,
+                p.is_active,
+            )
+            for p in plans
+        ],
+    )
 
     if not plans:
         await message.answer(
@@ -82,9 +94,8 @@ async def get_free_trial(
     for candidate in plans:
 
         result = await session.execute(
-            select(UserTrial)
-            .where(
-                UserTrial.user_id == user.id,
+            select(UserTrial).where(
+                UserTrial.user_id == user_id,
                 UserTrial.panel_key == candidate.panel_key,
                 UserTrial.used.is_(True),
             )
@@ -94,7 +105,7 @@ async def get_free_trial(
 
         print(
             "TRIAL CHECK:",
-            "user_id=", user.id,
+            "user_id=", user_id,
             "panel=", candidate.panel_key,
             "already_used=", already_used,
         )
@@ -104,7 +115,7 @@ async def get_free_trial(
             break
 
     # --------------------------------------------------------
-    # همه تست‌ها قبلاً استفاده شده‌اند
+    # همه تست‌ها استفاده شده‌اند
     # --------------------------------------------------------
 
     if plan is None:
@@ -113,15 +124,45 @@ async def get_free_trial(
         )
         return
 
+    # مقادیر ساده پلن را هم ذخیره می‌کنیم
+    plan_id = plan.id
+    panel_key = plan.panel_key
+    plan_name = plan.name
+
     # --------------------------------------------------------
     # نمایش اطلاعات تست
     # --------------------------------------------------------
 
+    traffic_text = (
+        f"{plan.traffic_mb} مگابایت"
+        if plan.traffic_mb
+        else (
+            "نامحدود"
+            if plan.traffic_gb <= 0
+            else f"{plan.traffic_gb} گیگابایت"
+        )
+    )
+
     await message.answer(
         "⏳ در حال ساخت سرویس تست رایگان شما...\n\n"
-        f"🌐 سرور: {plan.panel_key}\n"
-        f"📦 حجم: {plan.traffic_gb} گیگابایت\n"
+        f"🌐 سرور: {panel_key}\n"
+        f"📦 حجم: {traffic_text}\n"
         f"⏱ مدت: {plan.duration_days} روز"
+    )
+
+    # --------------------------------------------------------
+    # نام یکتای کانفیگ
+    # --------------------------------------------------------
+
+    config_name = (
+        f"Trial-{panel_key}-{telegram_id}-{uuid.uuid4().hex[:8]}"
+    )
+
+    print(
+        "TRIAL CREATE:",
+        "user_id=", user_id,
+        "panel=", panel_key,
+        "config_name=", config_name,
     )
 
     # --------------------------------------------------------
@@ -129,24 +170,28 @@ async def get_free_trial(
     # --------------------------------------------------------
 
     order = Order(
-        user_id=user.id,
-        plan_id=plan.id,
+        user_id=user_id,
+        plan_id=plan_id,
         amount=0,
         payment_method=PaymentMethod.TRIAL,
         status=OrderStatus.PAID,
-        config_name=f"Trial-{plan.panel_key}-{message.from_user.id}",
+        config_name=config_name,
     )
 
     session.add(order)
+
     await session.commit()
     await session.refresh(order)
 
+    # --------------------------------------------------------
     # relationshipها
+    # --------------------------------------------------------
+
     order.user = user
     order.plan = plan
 
     # --------------------------------------------------------
-    # ساخت کانفیگ
+    # ساخت کانفیگ روی پنل
     # --------------------------------------------------------
 
     try:
@@ -159,36 +204,57 @@ async def get_free_trial(
 
     except Exception as e:
 
+        # ذخیره مقادیر قبل از rollback انجام شده،
+        # بنابراین اینجا دیگر به ORM نیاز نداریم.
+
         await session.rollback()
 
         print(
-            f"TRIAL PROVISION ERROR "
-            f"user={user.id} "
-            f"panel={plan.panel_key}: {e}"
+            "TRIAL PROVISION ERROR:",
+            f"user={user_id}",
+            f"panel={panel_key}",
+            f"config={config_name}",
+            f"error={e}",
         )
 
         await message.answer(
-            "❌ متأسفانه ساخت سرویس تست انجام نشد.\n"
+            "❌ متأسفانه ساخت سرویس تست انجام نشد.\n\n"
             "لطفاً چند لحظه بعد دوباره تلاش کنید."
         )
 
         return
 
     # --------------------------------------------------------
-    # ثبت اینکه کاربر تست این پنل را مصرف کرده
+    # ساخت موفق بوده است
+    # حالا تست را مصرف‌شده ثبت می‌کنیم
     # --------------------------------------------------------
 
-    trial = UserTrial(
-        user_id=user.id,
-        panel_key=plan.panel_key,
-        used=True,
-    )
+    try:
 
-    session.add(trial)
-    await session.commit()
+        trial = UserTrial(
+            user_id=user_id,
+            panel_key=panel_key,
+            used=True,
+        )
 
-    print(
-        f"TRIAL CREATED "
-        f"user={user.id} "
-        f"panel={plan.panel_key}"
-    )
+        session.add(trial)
+
+        await session.commit()
+
+        print(
+            "TRIAL CREATED:",
+            f"user={user_id}",
+            f"panel={panel_key}",
+            f"config={config_name}",
+        )
+
+    except Exception as e:
+
+        await session.rollback()
+
+        print(
+            "TRIAL RECORD ERROR:",
+            f"user={user_id}",
+            f"panel={panel_key}",
+            f"error={e}",
+        )
