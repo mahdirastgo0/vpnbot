@@ -63,18 +63,20 @@ async def get_free_trial(
     for plan in trial_plans:
 
         result = await session.execute(
-            select(UserTrial)
-            .where(
+            select(UserTrial).where(
                 UserTrial.user_id == user.id,
                 UserTrial.panel_key == plan.panel_key,
                 UserTrial.used.is_(True),
             )
         )
 
-        used_trial = result.scalar_one_or_none()
+        trial = result.scalar_one_or_none()
 
-        if used_trial is None:
-            available_plans.append(plan)
+        if trial:
+            await message.answer(
+                f"❌ شما قبلاً سرویس تست سرور {plan.panel_key} را دریافت کرده‌اید."
+            )
+            return
 
     # ------------------------------------------------------
     # کاربر همه تست‌ها را گرفته
@@ -174,12 +176,12 @@ async def create_trial(
     trial = UserTrial(
         user_id=user.id,
         panel_key=plan.panel_key,
-        used=False,
+        used=True,
     )
 
     session.add(trial)
 
-    await session.flush()
+    await session.commit()
 
     # ------------------------------------------------------
     # ساخت سفارش رایگان
