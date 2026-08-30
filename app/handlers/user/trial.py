@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import (
     User,
-    Plan,
     UserTrial,
+    Plan,
     Order,
     OrderStatus,
     PaymentMethod,
@@ -19,6 +19,10 @@ from app.services.delivery import provision_and_deliver
 
 router = Router(name="trial")
 
+
+# ============================================================
+# 🎁 سرویس تست رایگان
+# ============================================================
 
 @router.message(F.text == "🎁 سرویس تست رایگان")
 async def get_free_trial(
@@ -33,9 +37,9 @@ async def get_free_trial(
         full_name=message.from_user.full_name,
     )
 
-    # ------------------------------------------------------
-    # پیدا کردن تمام پلن‌های تست فعال
-    # ------------------------------------------------------
+    # --------------------------------------------------------
+    # پیدا کردن اولین پلن تست فعال
+    # --------------------------------------------------------
 
     result = await session.execute(
         select(Plan)
@@ -46,146 +50,83 @@ async def get_free_trial(
         .order_by(Plan.id.asc())
     )
 
-    trial_plans = list(result.scalars().all())
+    plans = result.scalars().all()
 
-    if not trial_plans:
+    print(
+    "TRIAL DEBUG:",
+    "user_id=", user.id,
+    "telegram_id=", user.telegram_id,
+    "plans=", [
+        (
+            p.id,
+            p.panel_key,
+            p.is_trial,
+            p.is_active,
+        )
+        for p in plans
+    ],
+)
+
+    if not plans:
         await message.answer(
-            "❌ در حال حاضر هیچ سرویس تست رایگانی در دسترس نیست."
+            "❌ در حال حاضر هیچ سرویس تستی در دسترس نیست."
         )
         return
 
-    # ------------------------------------------------------
-    # فعلاً اگر چند پنل تست داریم، لیست پنل‌ها را نشان بده
-    # ------------------------------------------------------
+    # --------------------------------------------------------
+    # پیدا کردن اولین پنلی که کاربر هنوز تست آن را نگرفته
+    # --------------------------------------------------------
 
-    available_plans = []
+    plan = None
 
-    for plan in trial_plans:
+    for candidate in plans:
 
         result = await session.execute(
-            select(UserTrial).where(
+            select(UserTrial)
+            .where(
                 UserTrial.user_id == user.id,
-                UserTrial.panel_key == plan.panel_key,
+                UserTrial.panel_key == candidate.panel_key,
                 UserTrial.used.is_(True),
             )
         )
 
-        trial = result.scalar_one_or_none()
+        already_used = result.scalar_one_or_none()
 
-        if trial:
-            await message.answer(
-                f"❌ شما قبلاً سرویس تست سرور {plan.panel_key} را دریافت کرده‌اید."
-            )
-            return
+        print(
+            "TRIAL CHECK:",
+            "user_id=", user.id,
+            "panel=", candidate.panel_key,
+            "already_used=", already_used,
+        )
 
-    # ------------------------------------------------------
-    # کاربر همه تست‌ها را گرفته
-    # ------------------------------------------------------
+        if already_used is None:
+            plan = candidate
+            break
 
-    if not available_plans:
+    # --------------------------------------------------------
+    # همه تست‌ها قبلاً استفاده شده‌اند
+    # --------------------------------------------------------
+
+    if plan is None:
         await message.answer(
-            "❌ شما قبلاً تست رایگان تمام سرورها را دریافت کرده‌اید.\n\n"
-            "هر کاربر برای هر سرور فقط یک بار می‌تواند تست بگیرد."
+            "❌ شما تست رایگان تمام سرورها را قبلاً دریافت کرده‌اید."
         )
         return
 
-    # ------------------------------------------------------
-    # اگر فقط یک پنل تست داریم، مستقیم همان را بده
-    # ------------------------------------------------------
+    # --------------------------------------------------------
+    # نمایش اطلاعات تست
+    # --------------------------------------------------------
 
-    if len(available_plans) == 1:
-
-        plan = available_plans[0]
-
-        await create_trial(
-            message=message,
-            session=session,
-            user=user,
-            plan=plan,
-        )
-
-        return
-
-    # ------------------------------------------------------
-    # چند پنل تست داریم
-    # ------------------------------------------------------
-
-    text = (
-        "🎁 <b>سرویس‌های تست رایگان</b>\n\n"
-        "برای هر سرور یک بار امکان دریافت تست دارید.\n\n"
+    await message.answer(
+        "⏳ در حال ساخت سرویس تست رایگان شما...\n\n"
+        f"🌐 سرور: {plan.panel_key}\n"
+        f"📦 حجم: {plan.traffic_gb} گیگابایت\n"
+        f"⏱ مدت: {plan.duration_days} روز"
     )
 
-    for plan in available_plans:
-
-        traffic = (
-            f"{plan.traffic_mb} MB"
-            if plan.traffic_mb
-            else f"{plan.traffic_gb} GB"
-        )
-
-        text += (
-            f"🌐 <b>{plan.panel_key}</b>\n"
-            f"📦 {traffic}\n"
-            f"⏳ {plan.duration_days} روز\n\n"
-        )
-
-    # ------------------------------------------------------
-    # فعلاً انتخاب خودکار اولین تست موجود
-    # ------------------------------------------------------
-
-    plan = available_plans[0]
-
-    await create_trial(
-        message=message,
-        session=session,
-        user=user,
-        plan=plan,
-    )
-
-
-async def create_trial(
-    message: Message,
-    session: AsyncSession,
-    user: User,
-    plan: Plan,
-) -> None:
-
-    # ------------------------------------------------------
-    # بررسی دوباره برای جلوگیری از درخواست همزمان
-    # ------------------------------------------------------
-
-    result = await session.execute(
-        select(UserTrial)
-        .where(
-            UserTrial.user_id == user.id,
-            UserTrial.panel_key == plan.panel_key,
-            UserTrial.used.is_(True),
-        )
-    )
-
-    if result.scalar_one_or_none() is not None:
-        await message.answer(
-            "❌ شما قبلاً تست این سرور را دریافت کرده‌اید."
-        )
-        return
-
-    # ------------------------------------------------------
-    # ساخت رکورد Trial
-    # ------------------------------------------------------
-
-    trial = UserTrial(
-        user_id=user.id,
-        panel_key=plan.panel_key,
-        used=True,
-    )
-
-    session.add(trial)
-
-    await session.commit()
-
-    # ------------------------------------------------------
-    # ساخت سفارش رایگان
-    # ------------------------------------------------------
+    # --------------------------------------------------------
+    # ساخت سفارش
+    # --------------------------------------------------------
 
     order = Order(
         user_id=user.id,
@@ -197,18 +138,16 @@ async def create_trial(
     )
 
     session.add(order)
-
     await session.commit()
-
     await session.refresh(order)
 
-    # relationshipهای لازم
-    order.plan = plan
+    # relationshipها
     order.user = user
+    order.plan = plan
 
-    # ------------------------------------------------------
+    # --------------------------------------------------------
     # ساخت کانفیگ
-    # ------------------------------------------------------
+    # --------------------------------------------------------
 
     try:
 
@@ -218,21 +157,38 @@ async def create_trial(
             order=order,
         )
 
-        # --------------------------------------------------
-        # فقط بعد از موفقیت ساخت کانفیگ، تست مصرف شود
-        # --------------------------------------------------
-
-        trial.used = True
-
-        await session.commit()
-
     except Exception as e:
 
         await session.rollback()
+
+        print(
+            f"TRIAL PROVISION ERROR "
+            f"user={user.id} "
+            f"panel={plan.panel_key}: {e}"
+        )
 
         await message.answer(
             "❌ متأسفانه ساخت سرویس تست انجام نشد.\n"
             "لطفاً چند لحظه بعد دوباره تلاش کنید."
         )
 
-        print(f"TRIAL PROVISION ERROR: {e}")
+        return
+
+    # --------------------------------------------------------
+    # ثبت اینکه کاربر تست این پنل را مصرف کرده
+    # --------------------------------------------------------
+
+    trial = UserTrial(
+        user_id=user.id,
+        panel_key=plan.panel_key,
+        used=True,
+    )
+
+    session.add(trial)
+    await session.commit()
+
+    print(
+        f"TRIAL CREATED "
+        f"user={user.id} "
+        f"panel={plan.panel_key}"
+    )
