@@ -70,6 +70,7 @@ async def select_panel(
         .where(
             Plan.panel_key == panel_key,
             Plan.is_active.is_(True),
+            Plan.is_trial.is_(False),
         )
         .order_by(Plan.id.asc())
     )

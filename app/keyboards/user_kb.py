@@ -21,6 +21,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🛒 خرید سرویس")],
+            [KeyboardButton(text="🎁 سرویس تست رایگان")],
             [
                 KeyboardButton(text="📂 کانفیگ‌های من"),
                 KeyboardButton(text="🎧 پشتیبانی"),

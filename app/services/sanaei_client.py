@@ -86,6 +86,7 @@ class SanaeiClient:
         traffic_gb: int,
         duration_days: int,
         inbound_id: int | None = None,
+        traffic_mb: int | None = None,
     ) -> dict:
         inbound_id = inbound_id if inbound_id is not None else self.panel.inbound_id
         if inbound_id is None:
@@ -96,7 +97,12 @@ class SanaeiClient:
             raise SanaeiApiError("نام کانفیگ / email خالی است.")
 
         client_uuid = str(uuid.uuid4())
-        total_bytes = traffic_gb * 1024 * 1024 * 1024 if traffic_gb and traffic_gb > 0 else 0
+        if traffic_mb is not None and traffic_mb > 0:
+            total_bytes = traffic_mb * 1024 * 1024
+        elif traffic_gb and traffic_gb > 0:
+            total_bytes = traffic_gb * 1024 * 1024 * 1024
+        else:
+            total_bytes = 0
         expire_ms = int((datetime.now(timezone.utc) + timedelta(days=duration_days)).timestamp() * 1000) if duration_days and duration_days > 0 else 0
         requested_sub_id = uuid.uuid4().hex[:16]
 

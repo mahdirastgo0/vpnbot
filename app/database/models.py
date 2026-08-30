@@ -23,6 +23,7 @@ class PaymentMethod(str, enum.Enum):
     ZARINPAL = "zarinpal"
     CARD = "card"
     CRYPTO = "crypto"
+    TRIAL = "trial"
 
 
 class OrderStatus(str, enum.Enum):
@@ -64,6 +65,13 @@ class User(Base):
     is_blocked: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
+    )
+
+    trial_used: Mapped[bool] = mapped_column(
+    Boolean,
+    default=False,
+    nullable=False,
+    server_default="false",
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -108,6 +116,18 @@ class Plan(Base):
 
     traffic_gb: Mapped[int] = mapped_column(
         Integer
+    )
+
+    traffic_mb: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    is_trial: Mapped[bool] = mapped_column(
+    Boolean,
+    default=False,
+    nullable=False,
+    server_default="false",
     )
 
     price: Mapped[int] = mapped_column(

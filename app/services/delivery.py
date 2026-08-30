@@ -36,6 +36,7 @@ async def provision_and_deliver(
         result = await client.add_client(
             email=email,
             traffic_gb=plan.traffic_gb,
+            traffic_mb=plan.traffic_mb if plan.is_trial else None,
             duration_days=plan.duration_days,
             inbound_id=panel.inbound_id,
         )
@@ -81,9 +82,20 @@ async def provision_and_deliver(
 
         await session.commit()
 
-        traffic_text = "نامحدود" if plan.traffic_gb <= 0 else f"{plan.traffic_gb} GB"
-
+        if plan.is_trial and plan.traffic_mb:
+            traffic_text = f"{plan.traffic_mb} MB"
+        elif plan.traffic_gb <= 0:
+            traffic_text = "نامحدود"
+        else:
+            traffic_text = f"{plan.traffic_gb} GB"
+        title = (
+            "🎁 <b>سرویس تست رایگان شما آماده شد!</b>"
+            if plan.is_trial
+            else "🎉 <b>خرید شما با موفقیت انجام شد!</b>"
+        )
         text = (
+            text = (
+            f"{title}\n\n"
             "🎉 <b>خرید شما با موفقیت انجام شد!</b>\n\n"
             f"📦 <b>پلن:</b> {plan.name}\n"
             f"🌐 <b>سرور:</b> {panel.name}\n"
