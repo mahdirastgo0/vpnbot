@@ -100,7 +100,7 @@ async def provision_and_deliver(
             f"📊 <b>حجم:</b> {traffic_text}\n"
             f"⏳ <b>مدت:</b> {plan.duration_days} روز\n"
             f"📱 <b>نام کانفیگ:</b> {email}\n\n"
-            🔗 <b>Subscription:</b>\n"
+            "🔗 <b>Subscription:</b>\n"
             f"<code>{subscription_link}</code>\n\n"
             f"📡 <b>تعداد کانفیگ‌های تکی:</b> {len(subscription_links)}\n\n"
             "از بخش «📂 کانفیگ‌های من» می‌توانید "
