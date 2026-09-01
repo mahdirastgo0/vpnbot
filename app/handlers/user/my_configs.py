@@ -1,97 +1,226 @@
+from __future__ import annotations
+
+import json
+
 from aiogram import Router, F, types
 from aiogram.filters import Command
-from aiogram.types import BufferedInputFile, CallbackQuery
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+)
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.crud import get_or_create_user
 from app.database.models import User, VpnConfig
-from app.keyboards.inline import config_list_keyboard, back_to_menu_keyboard
+from app.keyboards.inline import (
+    config_list_keyboard,
+    back_to_menu_keyboard,
+)
+from app.keyboards.user_kb import (
+    config_items_kb,
+    main_menu_kb,
+)
 from app.utils import texts
 from app.utils.callback_data import ConfigListCallback
+
 
 router = Router()
 
 
-# ---------- نمایش لیست کانفیگ‌ها (مشترک) ----------
-async def show_configs_list(message: types.Message, user: User, session: AsyncSession):
+# ============================================================
+# ابزار
+# ============================================================
+
+def get_individual_links(
+    vpn_config: VpnConfig,
+) -> list[str]:
+
+    if not vpn_config.config_link:
+        return []
+
+    try:
+        data = json.loads(
+            vpn_config.config_link
+        )
+
+        if isinstance(data, list):
+            return [
+                link
+                for link in data
+                if isinstance(link, str)
+                and link.strip()
+            ]
+
+    except (
+        json.JSONDecodeError,
+        TypeError,
+    ):
+        pass
+
+    # برای داده‌های قدیمی
+    if (
+        isinstance(
+            vpn_config.config_link,
+            str,
+        )
+        and vpn_config.config_link.startswith(
+            (
+                "vless://",
+                "vmess://",
+                "trojan://",
+                "ss://",
+                "hy2://",
+                "hysteria://",
+            )
+        )
+    ):
+        return [
+            vpn_config.config_link
+        ]
+
+    return []
+
+
+# ============================================================
+# نمایش لیست کانفیگ‌ها
+# ============================================================
+
+async def show_configs_list(
+    message: types.Message,
+    user: User,
+    session: AsyncSession,
+):
+
     stmt = (
         select(VpnConfig)
-        .where(VpnConfig.user_id == user.id)
-        .where(VpnConfig.expire_at > func.now())
-        .order_by(VpnConfig.created_at.desc())
+        .where(
+            VpnConfig.user_id == user.id
+        )
+        .where(
+            VpnConfig.expire_at > func.now()
+        )
+        .order_by(
+            VpnConfig.created_at.desc()
+        )
     )
-    configs = (await session.execute(stmt)).scalars().all()
+
+    configs = (
+        await session.execute(stmt)
+    ).scalars().all()
 
     if not configs:
         await message.answer(
             "📭 شما هیچ کانفیگ فعالی ندارید.\n"
-            "برای خرید از بخش «🛒 خرید اشتراک» اقدام کنید.",
+            "برای خرید از بخش "
+            "«🛒 خرید سرویس» اقدام کنید.",
             reply_markup=back_to_menu_keyboard(),
         )
         return
 
     await message.answer(
-        "📂 کانفیگ‌های فعال شما:\n"
-        "یکی را انتخاب کنید تا اطلاعات کامل آن را ببینید.",
-        reply_markup=config_list_keyboard(configs),
+        "📂 <b>کانفیگ‌های فعال شما:</b>\n\n"
+        "یکی را انتخاب کنید.",
+        reply_markup=config_list_keyboard(
+            configs
+        ),
+        parse_mode="HTML",
     )
 
 
-# ---------- هندلر دستور /my_configs ----------
-# نکته: به‌جای اتکا به «user» تزریق‌شده توسط middleware (که معلوم نیست
-# روی همه‌ی روترها/انواع هندلر فعال باشه)، دقیقاً مثل start.py خود
-# کاربر رو مستقیم از دیتابیس می‌گیریم/می‌سازیم. این کار خطای
-# «missing 1 required positional argument: 'user'» رو کاملاً حذف می‌کنه.
-@router.message(Command("my_configs"))
-async def my_configs_command(message: types.Message, session: AsyncSession):
+# ============================================================
+# /my_configs
+# ============================================================
+
+@router.message(
+    Command("my_configs")
+)
+async def my_configs_command(
+    message: types.Message,
+    session: AsyncSession,
+):
+
     user = await get_or_create_user(
         session,
         telegram_id=message.from_user.id,
         username=message.from_user.username,
         full_name=message.from_user.full_name,
     )
-    await show_configs_list(message, user, session)
+
+    await show_configs_list(
+        message,
+        user,
+        session,
+    )
 
 
-# ---------- هندلر دکمه «📂 کانفیگ‌های من» از منوی اصلی (Reply Keyboard) ----------
-# این دکمه یک متن معمولی می‌فرسته (نه CallbackQuery)، برای همین باید
-# با message/F.text گرفته بشه. اگر متن دقیق دکمه‌تون توی
-# app/keyboards/user_kb.py چیز دیگه‌ایه، همین رشته رو با اون یکی عوض کنید.
-@router.message(F.text == "📂 کانفیگ‌های من")
-async def my_configs_button(message: types.Message, session: AsyncSession):
+# ============================================================
+# دکمه کانفیگ‌های من
+# ============================================================
+
+@router.message(
+    F.text == "📂 کانفیگ‌های من"
+)
+async def my_configs_button(
+    message: types.Message,
+    session: AsyncSession,
+):
+
     user = await get_or_create_user(
         session,
         telegram_id=message.from_user.id,
         username=message.from_user.username,
         full_name=message.from_user.full_name,
     )
-    await show_configs_list(message, user, session)
+
+    await show_configs_list(
+        message,
+        user,
+        session,
+    )
 
 
-# ---------- هندلر دکمه «کانفیگ‌های من» به‌صورت اینلاین (در صورت استفاده جای دیگه) ----------
-@router.callback_query(F.data == "my_configs")
-async def my_configs_callback(callback: CallbackQuery, session: AsyncSession):
+# ============================================================
+# callback کانفیگ‌های من
+# ============================================================
+
+@router.callback_query(
+    F.data == "my_configs"
+)
+async def my_configs_callback(
+    callback: CallbackQuery,
+    session: AsyncSession,
+):
+
     await callback.answer()
+
     user = await get_or_create_user(
         session,
         telegram_id=callback.from_user.id,
         username=callback.from_user.username,
         full_name=callback.from_user.full_name,
     )
-    await show_configs_list(callback.message, user, session)
+
+    await show_configs_list(
+        callback.message,
+        user,
+        session,
+    )
 
 
-# ---------- هندلر دکمه «بازگشت به منو» ----------
-@router.callback_query(F.data == "back_to_menu")
-async def back_to_menu_callback(callback: CallbackQuery):
+# ============================================================
+# بازگشت به منو
+# ============================================================
+
+@router.callback_query(
+    F.data == "back_to_menu"
+)
+async def back_to_menu_callback(
+    callback: CallbackQuery,
+):
+
     await callback.answer()
-    # اصلاح شد: مسیر و اسم درست تابع منو (طبق app/handlers/user/start.py)
-    from app.keyboards.user_kb import main_menu_kb
 
-    # منوی اصلی یک ReplyKeyboardMarkup هست، پس با edit_text قابل نمایش نیست
-    # (edit_text فقط InlineKeyboardMarkup قبول می‌کنه). به همین خاطر پیام
-    # قبلی رو حذف می‌کنیم و یک پیام جدید با کیبورد اصلی می‌فرستیم.
     try:
         await callback.message.delete()
     except Exception:
@@ -103,13 +232,19 @@ async def back_to_menu_callback(callback: CallbackQuery):
     )
 
 
-# ---------- نمایش جزئیات یک کانفیگ خاص ----------
-@router.callback_query(ConfigListCallback.filter())
+# ============================================================
+# نمایش یک کانفیگ
+# ============================================================
+
+@router.callback_query(
+    ConfigListCallback.filter()
+)
 async def show_config(
     callback: CallbackQuery,
     callback_data: ConfigListCallback,
     session: AsyncSession,
 ):
+
     user = await get_or_create_user(
         session,
         telegram_id=callback.from_user.id,
@@ -117,69 +252,381 @@ async def show_config(
         full_name=callback.from_user.full_name,
     )
 
-    vpn_config = await session.get(VpnConfig, callback_data.config_id)
+    vpn_config = await session.get(
+        VpnConfig,
+        callback_data.config_id,
+    )
+
     if not vpn_config:
-        await callback.answer("کانفیگ یافت نشد.", show_alert=True)
+        await callback.answer(
+            "کانفیگ یافت نشد.",
+            show_alert=True,
+        )
         return
 
     if vpn_config.user_id != user.id:
-        await callback.answer("شما به این کانفیگ دسترسی ندارید.", show_alert=True)
+        await callback.answer(
+            "شما به این کانفیگ دسترسی ندارید.",
+            show_alert=True,
+        )
         return
 
-    traffic_text = "نامحدود" if vpn_config.traffic_gb <= 0 else f"{vpn_config.traffic_gb} GB"
-    expire_text = vpn_config.expire_at.strftime("%Y-%m-%d %H:%M") if vpn_config.expire_at else "نامحدود"
-
-    caption = texts.CONFIG_QR_CAPTION.format(
-        config_name=vpn_config.config_name,
-        plan_name=vpn_config.plan_name,
-        traffic_gb=traffic_text,
-        expire_at=expire_text,
-        subscription_link=vpn_config.subscription_link or "ندارد",
+    individual_links = get_individual_links(
+        vpn_config
     )
 
-    if vpn_config.subscription_link:
-        try:
-            import qrcode
-            from io import BytesIO
+    # اگر هیچ لینک تکی نداریم
+    if not individual_links:
+        await callback.message.edit_text(
+            "❌ لینک کانفیگ تکی برای این سرویس پیدا نشد.\n\n"
+            "می‌توانید Subscription را استفاده کنید.",
+            reply_markup=back_to_menu_keyboard(),
+        )
 
-            qr = qrcode.QRCode(box_size=10, border=2)
-            qr.add_data(vpn_config.subscription_link)
-            qr.make(fit=True)
-            img = qr.make_image(fill_color="black", back_color="white")
-            bio = BytesIO()
-            img.save(bio, "PNG")
-            bio.seek(0)
+        await callback.answer()
+        return
 
-            await callback.message.delete()
+    traffic_text = (
+        "نامحدود"
+        if vpn_config.traffic_gb <= 0
+        else f"{vpn_config.traffic_gb} GB"
+    )
 
-            # تلگرام caption عکس رو حداکثر ۱۰۲۴ کاراکتر قبول می‌کنه.
-            # اگه لینک ساب (مثلاً به‌خاطر داده‌ی قدیمی توی دیتابیس) بلند
-            # باشه و caption از این حد رد بشه، عکس رو بدون caption
-            # می‌فرستیم و متن رو جدا (پیام متنی محدودیتش خیلی بیشتره).
-            if len(caption) > 1024:
-                await callback.message.answer_photo(
-                    photo=BufferedInputFile(bio.read(), filename="config_qr.png"),
-                )
-                await callback.message.answer(
-                    caption,
-                    reply_markup=back_to_menu_keyboard(),
-                )
-            else:
-                await callback.message.answer_photo(
-                    photo=BufferedInputFile(bio.read(), filename="config_qr.png"),
-                    caption=caption,
-                    reply_markup=back_to_menu_keyboard(),
-                )
-        except ImportError:
-            await callback.message.edit_text(
+    expire_text = (
+        vpn_config.expire_at.strftime(
+            "%Y-%m-%d %H:%M"
+        )
+        if vpn_config.expire_at
+        else "نامحدود"
+    )
+
+    # ========================================================
+    # نمایش اطلاعات سرویس و دکمه‌های کانفیگ تکی
+    # ========================================================
+
+    text = (
+        "📱 <b>اطلاعات کانفیگ</b>\n\n"
+        f"📌 <b>نام:</b> "
+        f"{vpn_config.config_name}\n"
+        f"📦 <b>پلن:</b> "
+        f"{vpn_config.plan_name}\n"
+        f"📊 <b>حجم:</b> "
+        f"{traffic_text}\n"
+        f"⏳ <b>انقضا:</b> "
+        f"{expire_text}\n\n"
+        f"📡 <b>تعداد کانفیگ تکی:</b> "
+        f"{len(individual_links)}\n\n"
+        "یکی از کانفیگ‌های تکی را انتخاب کنید:"
+    )
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=config_items_kb(
+            vpn_config.id,
+            len(individual_links),
+        ),
+        parse_mode="HTML",
+    )
+
+    await callback.answer()
+
+
+# ============================================================
+# نمایش کانفیگ تکی
+# ============================================================
+
+@router.callback_query(
+    F.data.startswith("single_config:")
+)
+async def show_single_config(
+    callback: CallbackQuery,
+    session: AsyncSession,
+):
+
+    try:
+        parts = callback.data.split(":")
+
+        if len(parts) != 3:
+            raise ValueError
+
+        config_id = int(parts[1])
+        index = int(parts[2])
+
+    except (
+        ValueError,
+        TypeError,
+    ):
+        await callback.answer(
+            "❌ اطلاعات کانفیگ نامعتبر است.",
+            show_alert=True,
+        )
+        return
+
+    user = await get_or_create_user(
+        session,
+        telegram_id=callback.from_user.id,
+        username=callback.from_user.username,
+        full_name=callback.from_user.full_name,
+    )
+
+    vpn_config = await session.get(
+        VpnConfig,
+        config_id,
+    )
+
+    if not vpn_config:
+        await callback.answer(
+            "❌ کانفیگ یافت نشد.",
+            show_alert=True,
+        )
+        return
+
+    if vpn_config.user_id != user.id:
+        await callback.answer(
+            "❌ شما به این کانفیگ دسترسی ندارید.",
+            show_alert=True,
+        )
+        return
+
+    individual_links = get_individual_links(
+        vpn_config
+    )
+
+    if (
+        index < 0
+        or index >= len(individual_links)
+    ):
+        await callback.answer(
+            "❌ لینک کانفیگ پیدا نشد.",
+            show_alert=True,
+        )
+        return
+
+    link = individual_links[index]
+
+    # ========================================================
+    # QR Code
+    # ========================================================
+
+    try:
+        import qrcode
+        from io import BytesIO
+
+        qr = qrcode.QRCode(
+            box_size=10,
+            border=2,
+        )
+
+        qr.add_data(link)
+        qr.make(fit=True)
+
+        img = qr.make_image(
+            fill_color="black",
+            back_color="white",
+        )
+
+        bio = BytesIO()
+
+        img.save(
+            bio,
+            "PNG",
+        )
+
+        bio.seek(0)
+
+        await callback.message.delete()
+
+        caption = (
+            "📱 <b>کانفیگ تکی</b>\n\n"
+            f"📌 <b>نام:</b> "
+            f"{vpn_config.config_name}\n"
+            f"🔢 <b>کانفیگ:</b> "
+            f"{index + 1}\n\n"
+            "🔗 <b>لینک:</b>\n"
+            f"<code>{link}</code>"
+        )
+
+        if len(caption) > 1024:
+
+            await callback.message.answer_photo(
+                photo=BufferedInputFile(
+                    bio.read(),
+                    filename="config_qr.png",
+                ),
+            )
+
+            await callback.message.answer(
                 caption,
                 reply_markup=back_to_menu_keyboard(),
+                parse_mode="HTML",
             )
-    else:
+
+        else:
+
+            await callback.message.answer_photo(
+                photo=BufferedInputFile(
+                    bio.read(),
+                    filename="config_qr.png",
+                ),
+                caption=caption,
+                reply_markup=back_to_menu_keyboard(),
+                parse_mode="HTML",
+            )
+
+    except ImportError:
+
         await callback.message.edit_text(
-            caption,
+            "📱 <b>کانفیگ تکی</b>\n\n"
+            f"📌 <b>نام:</b> "
+            f"{vpn_config.config_name}\n\n"
+            f"<code>{link}</code>",
             reply_markup=back_to_menu_keyboard(),
+            parse_mode="HTML",
         )
 
     await callback.answer()
 
+
+# ============================================================
+# نمایش Subscription
+# ============================================================
+
+@router.callback_query(
+    F.data.startswith("show_subscription:")
+)
+async def show_subscription(
+    callback: CallbackQuery,
+    session: AsyncSession,
+):
+
+    try:
+        config_id = int(
+            callback.data.split(":")[1]
+        )
+
+    except (
+        ValueError,
+        IndexError,
+    ):
+        await callback.answer(
+            "❌ اطلاعات نامعتبر است.",
+            show_alert=True,
+        )
+        return
+
+    user = await get_or_create_user(
+        session,
+        telegram_id=callback.from_user.id,
+        username=callback.from_user.username,
+        full_name=callback.from_user.full_name,
+    )
+
+    vpn_config = await session.get(
+        VpnConfig,
+        config_id,
+    )
+
+    if not vpn_config:
+        await callback.answer(
+            "❌ کانفیگ یافت نشد.",
+            show_alert=True,
+        )
+        return
+
+    if vpn_config.user_id != user.id:
+        await callback.answer(
+            "❌ شما به این کانفیگ دسترسی ندارید.",
+            show_alert=True,
+        )
+        return
+
+    subscription_link = (
+        vpn_config.subscription_link
+    )
+
+    if not subscription_link:
+        await callback.answer(
+            "❌ Subscription موجود نیست.",
+            show_alert=True,
+        )
+        return
+
+    # ========================================================
+    # QR Subscription
+    # ========================================================
+
+    try:
+        import qrcode
+        from io import BytesIO
+
+        qr = qrcode.QRCode(
+            box_size=10,
+            border=2,
+        )
+
+        qr.add_data(
+            subscription_link
+        )
+
+        qr.make(fit=True)
+
+        img = qr.make_image(
+            fill_color="black",
+            back_color="white",
+        )
+
+        bio = BytesIO()
+
+        img.save(
+            bio,
+            "PNG",
+        )
+
+        bio.seek(0)
+
+        await callback.message.delete()
+
+        caption = (
+            "🔗 <b>Subscription</b>\n\n"
+            f"📌 <b>نام کانفیگ:</b> "
+            f"{vpn_config.config_name}\n\n"
+            f"<code>{subscription_link}</code>"
+        )
+
+        if len(caption) > 1024:
+
+            await callback.message.answer_photo(
+                photo=BufferedInputFile(
+                    bio.read(),
+                    filename="subscription_qr.png",
+                ),
+            )
+
+            await callback.message.answer(
+                caption,
+                reply_markup=back_to_menu_keyboard(),
+                parse_mode="HTML",
+            )
+
+        else:
+
+            await callback.message.answer_photo(
+                photo=BufferedInputFile(
+                    bio.read(),
+                    filename="subscription_qr.png",
+                ),
+                caption=caption,
+                reply_markup=back_to_menu_keyboard(),
+                parse_mode="HTML",
+            )
+
+    except ImportError:
+
+        await callback.message.edit_text(
+            "🔗 <b>Subscription</b>\n\n"
+            f"<code>{subscription_link}</code>",
+            reply_markup=back_to_menu_keyboard(),
+            parse_mode="HTML",
+        )
+
+    await callback.answer()
