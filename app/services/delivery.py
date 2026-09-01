@@ -30,6 +30,13 @@ async def provision_and_deliver(
 
     email = (order.config_name or "").strip() or f"user-{user.telegram_id}-{order.id}"
 
+    print(
+        f"DEBUG CONFIG NAME | "
+        f"order_id={order.id} | "
+        f"order.config_name={order.config_name!r} | "
+        f"email={email!r}"
+    )
+
     client = SanaeiClient(panel)
 
     try:
