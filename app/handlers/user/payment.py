@@ -78,6 +78,11 @@ async def pay_card(callback: CallbackQuery, session: AsyncSession, state: FSMCon
         ),
         parse_mode="HTML",
     )
+
+    await callback.message.answer(
+    "<tg-spoiler>این یک تست اسپویلر است</tg-spoiler>",
+    parse_mode="HTML",
+    )
     await callback.answer()
 
 
