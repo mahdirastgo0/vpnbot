@@ -73,10 +73,10 @@ async def pay_card(callback: CallbackQuery, session: AsyncSession, state: FSMCon
         texts.CARD_INFO.format(
             amount=plan.price,
             currency=settings.CURRENCY_LABEL,
-            "<tg-spoiler><code>6037697681724610</code></tg-spoiler>",
+            card_number=settings.CARD_NUMBER,
             holder=settings.CARD_HOLDER_NAME,
             bank=settings.CARD_BANK_NAME,
-        )
+        ),
         parse_mode="HTML",
     )
 
