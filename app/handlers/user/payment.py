@@ -85,7 +85,6 @@ async def pay_card(callback: CallbackQuery, session: AsyncSession, state: FSMCon
             bank=settings.CARD_BANK_NAME,
     ),
     parse_mode="HTML",
-    reply_markup=card_payment_kb(card_number),
 )
 
     await callback.answer()
