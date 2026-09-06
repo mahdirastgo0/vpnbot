@@ -76,7 +76,7 @@ async def pay_card(callback: CallbackQuery, session: AsyncSession, state: FSMCon
             holder=settings.CARD_HOLDER_NAME,
             bank=settings.CARD_BANK_NAME,
         ),
-        parse_mode="Markdown",
+        parse_mode="MarkdownV2",
     )
     await callback.answer()
 
