@@ -76,7 +76,7 @@ async def pay_card(callback: CallbackQuery, session: AsyncSession, state: FSMCon
             "<tg-spoiler><code>6037697681724610</code></tg-spoiler>",
             holder=settings.CARD_HOLDER_NAME,
             bank=settings.CARD_BANK_NAME,
-        ),
+        )
         parse_mode="HTML",
     )
 
