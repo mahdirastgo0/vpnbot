@@ -68,6 +68,8 @@ async def pay_card(callback: CallbackQuery, session: AsyncSession, state: FSMCon
     await state.update_data(order_id=order.id)
     await state.set_state(BuyFlow.waiting_card_receipt)
 
+    card_number = settings.CARD_NUMBER.replace("||", "").replace("`", "")
+
     await callback.message.answer(
         texts.CARD_INFO.format(
             amount=plan.price,
