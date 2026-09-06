@@ -6,6 +6,13 @@ from aiogram.types import (
 
 
 def card_payment_kb(card_number: str) -> InlineKeyboardMarkup:
+    card_number = (
+        card_number
+        .replace(" ", "")
+        .replace("-", "")
+        .strip()
+    )
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -14,8 +21,8 @@ def card_payment_kb(card_number: str) -> InlineKeyboardMarkup:
                     copy_text=CopyTextButton(
                         text=card_number,
                     ),
-                ),
-            ],
+                )
+            ]
         ]
     )
 
