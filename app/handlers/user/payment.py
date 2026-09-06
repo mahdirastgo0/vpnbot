@@ -68,23 +68,18 @@ async def pay_card(callback: CallbackQuery, session: AsyncSession, state: FSMCon
     await state.update_data(order_id=order.id)
     await state.set_state(BuyFlow.waiting_card_receipt)
 
-    card_number = settings.CARD_NUMBER.replace("||", "").replace("`", "")
 
     await callback.message.answer(
         texts.CARD_INFO.format(
             amount=plan.price,
             currency=settings.CURRENCY_LABEL,
-            card_number=settings.CARD_NUMBER,
+            "<tg-spoiler><code>6037697681724610</code></tg-spoiler>",
             holder=settings.CARD_HOLDER_NAME,
             bank=settings.CARD_BANK_NAME,
         ),
         parse_mode="HTML",
     )
 
-    await callback.message.answer(
-    "<tg-spoiler>این یک تست اسپویلر است</tg-spoiler>",
-    parse_mode="HTML",
-    )
     await callback.answer()
 
 
