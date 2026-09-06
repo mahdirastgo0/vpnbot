@@ -23,10 +23,9 @@ ZARINPAL_LINK = "برای پرداخت روی دکمه زیر بزن. بعد ا�
 
 CARD_INFO = (
     "💳 لطفاً مبلغ {amount:,} {currency} رو به شماره کارت زیر واریز کن:\n\n"
-    "<tg-spoiler><code>{card_number}</code></tg-spoiler>\n"
+    "<tg-spoiler>{card_number}</tg-spoiler>\n"
     "به نام: {holder}\n"
     "بانک: {bank}\n\n"
-    "📋 برای کپی شماره کارت از دکمه زیر استفاده کن.\n"
     "📸 بعد از پرداخت، رسید رو ارسال کن."
 )
 

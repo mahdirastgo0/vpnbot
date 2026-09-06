@@ -1,10 +1,17 @@
+from __future__ import annotations
+
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database.crud import create_order, get_or_create_user, get_order, get_plan
+from app.database.crud import (
+    create_order,
+    get_or_create_user,
+    get_order,
+    get_plan,
+)
 from app.database.models import PaymentMethod
 from app.keyboards.admin_kb import order_review_kb
 from app.keyboards.user_kb import crypto_coins_kb, zarinpal_pay_kb
@@ -12,62 +19,162 @@ from app.services import zarinpal
 from app.states.user_states import BuyFlow
 from app.utils import texts
 
+
 router = Router(name="payment")
 
 
-async def _get_user_and_plan(session: AsyncSession, callback: CallbackQuery, plan_id: int):
+# ==========================================================
+# دریافت کاربر و پلن
+# ==========================================================
+
+async def _get_user_and_plan(
+    session: AsyncSession,
+    callback: CallbackQuery,
+    plan_id: int,
+):
     user = await get_or_create_user(
         session,
         telegram_id=callback.from_user.id,
         username=callback.from_user.username,
         full_name=callback.from_user.full_name,
     )
-    plan = await get_plan(session, plan_id)
+
+    plan = await get_plan(
+        session,
+        plan_id,
+    )
+
     return user, plan
 
 
-# ---------------------------------------------------------------- زرین‌پال
-@router.callback_query(F.data.startswith("pay:zarinpal:"))
-async def pay_zarinpal(callback: CallbackQuery, session: AsyncSession) -> None:
-    plan_id = int(callback.data.split(":")[2])
-    user, plan = await _get_user_and_plan(session, callback, plan_id)
+# ==========================================================
+# زرین‌پال
+# ==========================================================
+
+@router.callback_query(
+    F.data.startswith("pay:zarinpal:")
+)
+async def pay_zarinpal(
+    callback: CallbackQuery,
+    session: AsyncSession,
+) -> None:
+
+    plan_id = int(
+        callback.data.split(":")[2]
+    )
+
+    user, plan = await _get_user_and_plan(
+        session,
+        callback,
+        plan_id,
+    )
+
     if plan is None:
-        await callback.answer("پلن یافت نشد.", show_alert=True)
+        await callback.answer(
+            "پلن یافت نشد.",
+            show_alert=True,
+        )
         return
 
-    order = await create_order(session, user, plan, PaymentMethod.ZARINPAL)
+    order = await create_order(
+        session,
+        user,
+        plan,
+        PaymentMethod.ZARINPAL,
+    )
 
     try:
+
         authority, pay_link = await zarinpal.request_payment(
             amount_toman=plan.price,
-            description=f"خرید پلن {plan.name} - سفارش #{order.id}",
+            description=(
+                f"خرید پلن {plan.name} "
+                f"- سفارش #{order.id}"
+            ),
             order_id=order.id,
         )
+
     except zarinpal.ZarinpalError as e:
-        await callback.message.answer(f"⚠️ خطا در اتصال به زرین‌پال: {e}")
+
+        await callback.message.answer(
+            f"⚠️ خطا در اتصال به زرین‌پال:\n{e}"
+        )
+
         await callback.answer()
         return
 
     order.zarinpal_authority = authority
+
     await session.commit()
 
-    await callback.message.answer(texts.ZARINPAL_LINK, reply_markup=zarinpal_pay_kb(pay_link))
+    await callback.message.answer(
+        texts.ZARINPAL_LINK,
+        reply_markup=zarinpal_pay_kb(pay_link),
+    )
+
     await callback.answer()
 
 
-# ------------------------------------------------------------- کارت به کارت
-@router.callback_query(F.data.startswith("pay:card:"))
-async def pay_card(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
-    plan_id = int(callback.data.split(":")[2])
-    user, plan = await _get_user_and_plan(session, callback, plan_id)
+# ==========================================================
+# کارت به کارت
+# ==========================================================
+
+@router.callback_query(
+    F.data.startswith("pay:card:")
+)
+async def pay_card(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+
+    plan_id = int(
+        callback.data.split(":")[2]
+    )
+
+    user, plan = await _get_user_and_plan(
+        session,
+        callback,
+        plan_id,
+    )
+
     if plan is None:
-        await callback.answer("پلن یافت نشد.", show_alert=True)
+        await callback.answer(
+            "پلن یافت نشد.",
+            show_alert=True,
+        )
         return
 
-    order = await create_order(session, user, plan, PaymentMethod.CARD)
-    await state.update_data(order_id=order.id)
-    await state.set_state(BuyFlow.waiting_card_receipt)
+    # ------------------------------------------------------
+    # ساخت سفارش
+    # ------------------------------------------------------
 
+    order = await create_order(
+        session,
+        user,
+        plan,
+        PaymentMethod.CARD,
+    )
+
+    await state.update_data(
+        order_id=order.id
+    )
+
+    await state.set_state(
+        BuyFlow.waiting_card_receipt
+    )
+
+    # ------------------------------------------------------
+    # شماره کارت
+    #
+    # ممکن است داخل .env به شکل:
+    #
+    # ||`6037...`||
+    #
+    # ذخیره شده باشد.
+    #
+    # این کار علامت‌های Markdown را حذف می‌کند.
+    # ------------------------------------------------------
 
     card_number = (
         settings.CARD_NUMBER
@@ -76,6 +183,10 @@ async def pay_card(callback: CallbackQuery, session: AsyncSession, state: FSMCon
         .strip()
     )
 
+    # ------------------------------------------------------
+    # نمایش اطلاعات کارت
+    # ------------------------------------------------------
+
     await callback.message.answer(
         texts.CARD_INFO.format(
             amount=plan.price,
@@ -83,27 +194,67 @@ async def pay_card(callback: CallbackQuery, session: AsyncSession, state: FSMCon
             card_number=card_number,
             holder=settings.CARD_HOLDER_NAME,
             bank=settings.CARD_BANK_NAME,
-    ),
-    parse_mode="HTML",
-)
+        ),
+        parse_mode="HTML",
+    )
 
     await callback.answer()
 
 
-@router.message(BuyFlow.waiting_card_receipt, F.photo)
-async def receive_card_receipt(message: Message, session: AsyncSession, state: FSMContext, bot: Bot) -> None:
+# ==========================================================
+# دریافت رسید کارت به کارت
+# ==========================================================
+
+@router.message(
+    BuyFlow.waiting_card_receipt,
+    F.photo,
+)
+async def receive_card_receipt(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    bot: Bot,
+) -> None:
+
     data = await state.get_data()
-    order = await get_order(session, data["order_id"])
+
+    order = await get_order(
+        session,
+        data["order_id"],
+    )
+
     if order is None:
-        await message.answer("سفارش پیدا نشد، لطفاً دوباره از منو شروع کن.")
+
+        await message.answer(
+            "سفارش پیدا نشد، لطفاً دوباره از منو شروع کن."
+        )
+
         await state.clear()
         return
 
-    order.receipt_file_id = message.photo[-1].file_id
+    # ------------------------------------------------------
+    # ذخیره رسید
+    # ------------------------------------------------------
+
+    order.receipt_file_id = (
+        message.photo[-1].file_id
+    )
+
     await session.commit()
+
     await state.clear()
 
-    await message.answer(texts.CARD_RECEIPT_RECEIVED)
+    # ------------------------------------------------------
+    # اطلاع به کاربر
+    # ------------------------------------------------------
+
+    await message.answer(
+        texts.CARD_RECEIPT_RECEIVED
+    )
+
+    # ------------------------------------------------------
+    # ساخت پیام برای ادمین
+    # ------------------------------------------------------
 
     caption = texts.ADMIN_NEW_CARD_ORDER.format(
         order_id=order.id,
@@ -113,40 +264,117 @@ async def receive_card_receipt(message: Message, session: AsyncSession, state: F
         amount=order.amount,
         currency=settings.CURRENCY_LABEL,
     )
+
+    # ------------------------------------------------------
+    # ارسال رسید برای ادمین‌ها
+    # ------------------------------------------------------
+
     for admin_id in settings.ADMIN_IDS:
+
         await bot.send_photo(
             chat_id=admin_id,
             photo=order.receipt_file_id,
             caption=caption,
-            reply_markup=order_review_kb(order.id),
+            reply_markup=order_review_kb(
+                order.id
+            ),
         )
 
 
-# ------------------------------------------------------------------ رمزارز
-@router.callback_query(F.data.startswith("pay:crypto:"))
-async def pay_crypto(callback: CallbackQuery, session: AsyncSession) -> None:
-    plan_id = int(callback.data.split(":")[2])
-    await callback.message.answer(texts.CRYPTO_CHOOSE_COIN, reply_markup=crypto_coins_kb(plan_id))
+# ==========================================================
+# رمزارز
+# ==========================================================
+
+@router.callback_query(
+    F.data.startswith("pay:crypto:")
+)
+async def pay_crypto(
+    callback: CallbackQuery,
+    session: AsyncSession,
+) -> None:
+
+    plan_id = int(
+        callback.data.split(":")[2]
+    )
+
+    await callback.message.answer(
+        texts.CRYPTO_CHOOSE_COIN,
+        reply_markup=crypto_coins_kb(
+            plan_id
+        ),
+    )
+
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("crypto_coin:"))
-async def choose_crypto_coin(callback: CallbackQuery, session: AsyncSession, state: FSMContext) -> None:
+# ==========================================================
+# انتخاب ارز دیجیتال
+# ==========================================================
+
+@router.callback_query(
+    F.data.startswith("crypto_coin:")
+)
+async def choose_crypto_coin(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+
     _, coin, plan_id = callback.data.split(":")
+
     plan_id = int(plan_id)
-    user, plan = await _get_user_and_plan(session, callback, plan_id)
+
+    user, plan = await _get_user_and_plan(
+        session,
+        callback,
+        plan_id,
+    )
+
     if plan is None:
-        await callback.answer("پلن یافت نشد.", show_alert=True)
+
+        await callback.answer(
+            "پلن یافت نشد.",
+            show_alert=True,
+        )
+
         return
 
-    order = await create_order(session, user, plan, PaymentMethod.CRYPTO)
+    # ------------------------------------------------------
+    # ساخت سفارش
+    # ------------------------------------------------------
+
+    order = await create_order(
+        session,
+        user,
+        plan,
+        PaymentMethod.CRYPTO,
+    )
+
     order.crypto_coin = coin
+
     await session.commit()
 
-    await state.update_data(order_id=order.id)
-    await state.set_state(BuyFlow.waiting_crypto_txid)
+    await state.update_data(
+        order_id=order.id
+    )
 
-    address = getattr(settings.CRYPTO_WALLETS, coin)
+    await state.set_state(
+        BuyFlow.waiting_crypto_txid
+    )
+
+    # ------------------------------------------------------
+    # آدرس کیف پول
+    # ------------------------------------------------------
+
+    address = getattr(
+        settings.CRYPTO_WALLETS,
+        coin,
+    )
+
+    # ------------------------------------------------------
+    # نمایش اطلاعات پرداخت
+    # ------------------------------------------------------
+
     await callback.message.answer(
         texts.CRYPTO_INFO.format(
             amount=plan.price,
@@ -156,23 +384,64 @@ async def choose_crypto_coin(callback: CallbackQuery, session: AsyncSession, sta
         ),
         parse_mode="Markdown",
     )
+
     await callback.answer()
 
 
-@router.message(BuyFlow.waiting_crypto_txid, F.text)
-async def receive_crypto_txid(message: Message, session: AsyncSession, state: FSMContext, bot: Bot) -> None:
+# ==========================================================
+# دریافت TxID رمزارز
+# ==========================================================
+
+@router.message(
+    BuyFlow.waiting_crypto_txid,
+    F.text,
+)
+async def receive_crypto_txid(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    bot: Bot,
+) -> None:
+
     data = await state.get_data()
-    order = await get_order(session, data["order_id"])
+
+    order = await get_order(
+        session,
+        data["order_id"],
+    )
+
     if order is None:
-        await message.answer("سفارش پیدا نشد، لطفاً دوباره از منو شروع کن.")
+
+        await message.answer(
+            "سفارش پیدا نشد، لطفاً دوباره از منو شروع کن."
+        )
+
         await state.clear()
         return
 
-    order.crypto_tx_id = message.text.strip()
+    # ------------------------------------------------------
+    # ذخیره TxID
+    # ------------------------------------------------------
+
+    order.crypto_tx_id = (
+        message.text.strip()
+    )
+
     await session.commit()
+
     await state.clear()
 
-    await message.answer(texts.CRYPTO_TX_RECEIVED)
+    # ------------------------------------------------------
+    # اطلاع به کاربر
+    # ------------------------------------------------------
+
+    await message.answer(
+        texts.CRYPTO_TX_RECEIVED
+    )
+
+    # ------------------------------------------------------
+    # پیام ادمین
+    # ------------------------------------------------------
 
     text = texts.ADMIN_NEW_CRYPTO_ORDER.format(
         order_id=order.id,
@@ -184,5 +453,18 @@ async def receive_crypto_txid(message: Message, session: AsyncSession, state: FS
         coin=order.crypto_coin.upper(),
         tx_id=order.crypto_tx_id,
     )
+
+    # ------------------------------------------------------
+    # ارسال برای ادمین‌ها
+    # ------------------------------------------------------
+
     for admin_id in settings.ADMIN_IDS:
-        await bot.send_message(admin_id, text, reply_markup=order_review_kb(order.id), parse_mode="Markdown")
+
+        await bot.send_message(
+            admin_id,
+            text,
+            reply_markup=order_review_kb(
+                order.id
+            ),
+            parse_mode="Markdown",
+        )
