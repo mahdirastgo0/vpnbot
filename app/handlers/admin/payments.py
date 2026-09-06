@@ -19,7 +19,6 @@ from app.database.crud import (
 )
 from app.database.models import OrderStatus
 from app.keyboards.admin_kb import order_review_kb
-from app.keyboards.payment_kb import card_payment_kb
 from app.middlewares.admin_filter import IsAdmin
 from app.services.delivery import provision_and_deliver
 from app.services.sanaei_client import SanaeiApiError
