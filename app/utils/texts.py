@@ -26,6 +26,7 @@ CARD_INFO = (
     "<tg-spoiler><code>{card_number}</code></tg-spoiler>\n"
     "به نام: {holder}\n"
     "بانک: {bank}\n\n"
+    "📋 برای کپی شماره کارت از دکمه زیر استفاده کن.\n"
     "📸 بعد از پرداخت، رسید رو ارسال کن."
 )
 
