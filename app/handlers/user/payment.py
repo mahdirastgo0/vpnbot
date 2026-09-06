@@ -14,6 +14,7 @@ from app.database.crud import (
 )
 from app.database.models import PaymentMethod
 from app.keyboards.admin_kb import order_review_kb
+from app.keyboards.payment_kb import card_payment_kb
 from app.keyboards.user_kb import crypto_coins_kb, zarinpal_pay_kb
 from app.services import zarinpal
 from app.states.user_states import BuyFlow
@@ -145,10 +146,6 @@ async def pay_card(
         )
         return
 
-    # ------------------------------------------------------
-    # ساخت سفارش
-    # ------------------------------------------------------
-
     order = await create_order(
         session,
         user,
@@ -164,28 +161,12 @@ async def pay_card(
         BuyFlow.waiting_card_receipt
     )
 
-    # ------------------------------------------------------
-    # شماره کارت
-    #
-    # ممکن است داخل .env به شکل:
-    #
-    # ||`6037...`||
-    #
-    # ذخیره شده باشد.
-    #
-    # این کار علامت‌های Markdown را حذف می‌کند.
-    # ------------------------------------------------------
-
     card_number = (
         settings.CARD_NUMBER
         .replace("||", "")
         .replace("`", "")
         .strip()
     )
-
-    # ------------------------------------------------------
-    # نمایش اطلاعات کارت
-    # ------------------------------------------------------
 
     await callback.message.answer(
         texts.CARD_INFO.format(
@@ -196,6 +177,7 @@ async def pay_card(
             bank=settings.CARD_BANK_NAME,
         ),
         parse_mode="HTML",
+        reply_markup=card_payment_kb(card_number),
     )
 
     await callback.answer()

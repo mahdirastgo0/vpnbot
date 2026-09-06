@@ -1,4 +1,23 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    CopyTextButton,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+
+
+def card_payment_kb(card_number: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📋 کپی شماره کارت",
+                    copy_text=CopyTextButton(
+                        text=card_number,
+                    ),
+                ),
+            ],
+        ]
+    )
 
 
 def payment_methods_kb(plan_id: int) -> InlineKeyboardMarkup:
@@ -30,7 +49,6 @@ def payment_methods_kb(plan_id: int) -> InlineKeyboardMarkup:
             ],
         ]
     )
-
 
 
 def zarinpal_pay_kb(
