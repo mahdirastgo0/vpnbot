@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from urllib.parse import quote_plus
+
+from sqlalchemy.engine import URL
 
 from dotenv import load_dotenv
 
@@ -89,11 +90,11 @@ class PanelConfig:
     api_base_path: str = "/panel/api"
 
     # ------------------------------------------------------
-    # آدرس پایه Subscription (شامل مسیر اختصاصی ساب‌سکریپشن پنل)
+    # آدرس پایه Subscription (شامل مسیر اختصاصی سابسکریپشن پنل)
     # مثال: https://panel.kenznum.ir:2096/sub/pbakp1v2aolxv0vg
     # این رشته مسیر sub-path رندوم/اختصاصی پنل رو هم باید داشته باشه،
-    # چون پنل subLinks واقعی برنمی‌گردونه و باید دستی ساخته بشه.
-    # اگه خالی بمونه، کد به یک fallback ناقص (بدون sub-path) می‌افته.
+    # چون پنل subLinks واقعی برنمیگردونه و باید دستی ساخته بشه.
+    # اگه خالی بمونه، کد به یک fallback ناقص (بدون sub-path) میافته.
     # ------------------------------------------------------
     subscription_url: str = ""
 
@@ -163,7 +164,7 @@ def _load_panels() -> dict[str, PanelConfig]:
                 required=True,
             ),
 
-            # اینباندی که کلاینت داخل آن ساخته می‌شود
+            # اینباندی که کلاینت داخل آن ساخته میشود
             inbound_id=int(
                 _get(
                     prefix + "INBOUND_ID",
@@ -188,7 +189,7 @@ def _load_panels() -> dict[str, PanelConfig]:
             ).rstrip("/"),
 
             # اختیاری است، اما برای اینکه لینک Subscription درست ساخته
-            # بشه (با مسیر sub-path اختصاصی پنل) شدیداً پیشنهاد می‌شود
+            # بشه (با مسیر sub-path اختصاصی پنل) شدیداً پیشنهاد میشود
             # تنظیم بشه. مثال مقدار:
             # PANEL_<KEY>_SUBSCRIPTION_URL=https://panel.kenznum.ir:2096/sub/pbakp1v2aolxv0vg
             subscription_url=_get(
@@ -395,13 +396,16 @@ class Settings:
     )
 
     @property
-    def DATABASE_URL(self) -> str:
+    def DATABASE_URL(self) -> URL:
 
-        return (
-            "postgresql+asyncpg://"
-            f"{quote_plus(self.DB_USER)}:{quote_plus(self.DB_PASSWORD)}"
-            f"@{self.DB_HOST}:{self.DB_PORT}"
-            f"/{self.DB_NAME}"
+        # URL.create رمز را بدون نیاز به escape (و بدون تغییر) به درایور میدهد
+        return URL.create(
+            "postgresql+asyncpg",
+            username=self.DB_USER,
+            password=self.DB_PASSWORD,
+            host=self.DB_HOST,
+            port=int(self.DB_PORT),
+            database=self.DB_NAME,
         )
 
     # ======================================================
@@ -492,7 +496,7 @@ class Settings:
             )
 
         # --------------------------------------------------
-        # بررسی پنل‌های پلن
+        # بررسی پنلهای پلن
         # --------------------------------------------------
 
         for plan in self.PLANS.values():
@@ -501,7 +505,7 @@ class Settings:
 
                 raise RuntimeError(
                     f"پلن «{plan.key}» به پنل "
-                    f"«{plan.panel_key}» اشاره می‌کند، "
+                    f"«{plan.panel_key}» اشاره میکند، "
                     f"اما این پنل در PANELS وجود ندارد."
                 )
 
