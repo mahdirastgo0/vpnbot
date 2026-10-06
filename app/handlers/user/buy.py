@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import secrets
+from html import escape
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -7,17 +10,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database.models import Plan, PaymentMethod, OrderStatus
-from app.database.crud import get_plan, get_or_create_user, create_order
+from app.database.models import Plan
+from app.database.crud import get_plan
 from app.keyboards.user_kb import (
+    MENU_BUTTONS,
+    PLAN_TYPE_LABELS,
     panels_kb,
     plans_kb,
     payment_methods_kb,
     config_name_kb,
 )
-from app.states.buy import BuyFlow
+from app.states.user_states import BuyFlow
 from app.utils import texts
-from app.services.delivery import provision_and_deliver
 
 
 router = Router(name="user_buy")
@@ -164,6 +168,7 @@ async def select_plan(
 @router.message(
     BuyFlow.waiting_config_name,
     F.text,
+    ~F.text.in_(MENU_BUTTONS),
 )
 async def receive_config_name(
     message: Message,
@@ -179,9 +184,9 @@ async def receive_config_name(
         )
         return
 
-    if len(name) > 128:
+    if len(name) > 64:
         await message.answer(
-            "❌ اسم کانفیگ حداکثر ۱۲۸ کاراکتر باشد."
+            "❌ اسم کانفیگ حداکثر ۶۴ کاراکتر باشد."
         )
         return
 
@@ -230,27 +235,16 @@ async def receive_config_name(
     traffic = (
         "نامحدود"
         if plan.traffic_gb <= 0
-        else f"{plan.traffic_gb} گیگ"
+        else f"{plan.traffic_gb} گیگابایت"
     )
-
-    plan_type = getattr(
-        plan.plan_type,
-        "value",
-        str(plan.plan_type),
-    )
-
-    plan_type_labels = {
-        "DIRECT": "⚡️ مستقیم",
-        "TUNNEL": "🚇 تانل",
-    }
 
     summary = texts.ORDER_SUMMARY.format(
-        panel_name=panel.name,
-        plan_type=plan_type_labels.get(
-            plan_type,
-            plan_type,
+        panel_name=escape(panel.name),
+        plan_type=PLAN_TYPE_LABELS.get(
+            plan.plan_type,
+            str(plan.plan_type),
         ),
-        plan_name=plan.name,
+        plan_name=escape(plan.name),
         duration=plan.duration_days,
         traffic=traffic,
         amount=plan.price,
@@ -279,12 +273,20 @@ async def random_config_name(
     state: FSMContext,
 ) -> None:
 
-    import secrets
-
     random_name = (
         f"VPN-"
         f"{secrets.token_hex(4).upper()}"
     )
+
+    data = await state.get_data()
+    plan_id = data.get("plan_id")
+
+    if not plan_id:
+        await callback.answer(
+            "❌ اطلاعات خرید پیدا نشد. دوباره از «🛒 خرید سرویس» شروع کن.",
+            show_alert=True,
+        )
+        return
 
     await state.update_data(
         config_name=random_name,
@@ -292,21 +294,10 @@ async def random_config_name(
 
     await callback.message.edit_text(
         f"📱 نام کانفیگ:\n\n"
-        f"`{random_name}`\n\n"
+        f"<code>{random_name}</code>\n\n"
         f"💳 روش پرداخت را انتخاب کنید.",
-        reply_markup=None,
-        parse_mode="Markdown",
+        reply_markup=payment_methods_kb(int(plan_id)),
     )
-
-    data = await state.get_data()
-    plan_id = data.get("plan_id")
-
-    if plan_id:
-        await callback.message.edit_reply_markup(
-            reply_markup=payment_methods_kb(
-                int(plan_id)
-            )
-        )
 
     await callback.answer()
 

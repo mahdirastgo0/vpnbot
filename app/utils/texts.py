@@ -15,7 +15,7 @@ ORDER_SUMMARY = (
     "▫️ نوع اتصال: {plan_type}\n"
     "▫️ پلن: {plan_name}\n"
     "▫️ مدت: {duration} روز\n"
-    "▫️ حجم: {traffic} گیگابایت\n"
+    "▫️ حجم: {traffic}\n"
     "▫️ مبلغ: {amount:,} {currency}\n"
 )
 
@@ -37,7 +37,7 @@ CARD_RECEIPT_RECEIVED = (
 CRYPTO_CHOOSE_COIN = "🪙 ارز مورد نظر برای پرداخت رو انتخاب کن:"
 CRYPTO_INFO = (
     "🪙 لطفاً معادل {amount:,} {currency} رو به آدرس زیر ({coin}) واریز کن:\n\n"
-    "`{address}`\n\n"
+    "<code>{address}</code>\n\n"
     "بعد از واریز، هش تراکنش (TxID) رو همینجا برام بفرست."
 )
 CRYPTO_TX_RECEIVED = (
@@ -58,7 +58,7 @@ ADMIN_NEW_CRYPTO_ORDER = (
     "کاربر: {user_mention} (ID: {telegram_id})\n"
     "پلن: {plan_name} — {amount:,} {currency}\n"
     "ارز: {coin}\n"
-    "TxID: `{tx_id}`\n"
+    "TxID: <code>{tx_id}</code>\n"
 )
 
 NOT_ADMIN = "⛔️ این دستور فقط برای ادمین‌هاست."

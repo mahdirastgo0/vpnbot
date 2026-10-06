@@ -45,11 +45,16 @@ async def get_or_create_user(
 
     if user is not None:
 
-        user.username = username
-        user.full_name = full_name
-
-        await session.commit()
-        await session.refresh(user)
+        # فقط در صورت تغییر commit می‌کنیم (جلوگیری از نوشتن بی‌مورد در هر آپدیت)
+        if (
+            user.username != username
+            or user.full_name != full_name
+            or user.is_blocked
+        ):
+            user.username = username
+            user.full_name = full_name
+            user.is_blocked = False
+            await session.commit()
 
         return user
 
@@ -307,7 +312,7 @@ async def list_paid_orders(
 async def mark_order_paid(
     session: AsyncSession,
     order: Order,
-    admin_id: int,
+    admin_id: int | None = None,
 ) -> None:
 
     order.status = OrderStatus.PAID

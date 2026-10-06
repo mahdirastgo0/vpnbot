@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.config import settings
-from app.database.engine import init_db
+from app.database.engine import engine, init_db
 from app.handlers.admin import admin_router
 from app.handlers.user import user_router
 from app.middlewares.db_middleware import DbSessionMiddleware
@@ -29,7 +29,7 @@ async def main() -> None:
     await init_db()
     logger.info("دیتابیس آماده شد.")
 
-    await run_callback_server(bot)
+    runner = await run_callback_server(bot)
     logger.info(
         "وب‌سرور کال‌بک زرین‌پال روی %s:%s بالا آمد.",
         settings.CALLBACK_SERVER_HOST,
@@ -41,7 +41,9 @@ async def main() -> None:
         logger.info("ربات در حال اجراست...")
         await dp.start_polling(bot)
     finally:
+        await runner.cleanup()
         await close_all()
+        await engine.dispose()
         await bot.session.close()
 
 

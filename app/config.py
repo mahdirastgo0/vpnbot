@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 
@@ -398,7 +399,7 @@ class Settings:
 
         return (
             "postgresql+asyncpg://"
-            f"{self.DB_USER}:{self.DB_PASSWORD}"
+            f"{quote_plus(self.DB_USER)}:{quote_plus(self.DB_PASSWORD)}"
             f"@{self.DB_HOST}:{self.DB_PORT}"
             f"/{self.DB_NAME}"
         )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html import escape
+
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -926,6 +928,12 @@ async def list_plans_command(
     text = "📋 همه سرویس‌ها:\n\n"
 
     for p in plans:
+
+        # محدودیت ۴۰۹۶ کاراکتری پیام تلگرام
+        if len(text) > 3500:
+            await message.answer(text)
+            text = ""
+
         status = "🟢" if p.is_active else "🔴"
 
         traffic = (
@@ -938,8 +946,8 @@ async def list_plans_command(
 
         text += (
             f"{status} #{p.id}\n"
-            f"📦 {p.name}\n"
-            f"🖥 {panel.name if panel else p.panel_key}\n"
+            f"📦 {escape(p.name)}\n"
+            f"🖥 {escape(panel.name if panel else p.panel_key)}\n"
             f"📊 {traffic}\n"
             f"📅 {p.duration_days} روز\n"
             f"💰 {p.price:,} {settings.CURRENCY_LABEL}\n\n"
@@ -958,7 +966,7 @@ async def delete_plan_command(
     if len(parts) != 2 or not parts[1].isdigit():
         await message.answer(
             "استفاده:\n"
-            "/delplan <شماره پلن>"
+            "/delplan &lt;شماره پلن&gt;"
         )
         return
 

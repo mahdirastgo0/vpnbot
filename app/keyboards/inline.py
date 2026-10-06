@@ -10,7 +10,7 @@ def config_list_keyboard(configs: list) -> InlineKeyboardMarkup:
     
     for config in configs:
         # استفاده از config_name برای نمایش
-        label = config.config_name or f"کانفیگ #{config.id}"
+        label = f"📱 {config.config_name or 'کانفیگ'} #{config.id}"
         builder.button(
             text=label,
             callback_data=ConfigListCallback(config_id=config.id).pack()

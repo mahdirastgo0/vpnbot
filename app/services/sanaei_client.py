@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlparse
@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 
 
 class SanaeiApiError(RuntimeError):
+    pass
+
+
+class SanaeiTimeoutError(SanaeiApiError):
     pass
 
 
@@ -35,7 +39,7 @@ class SanaeiClient:
         self._client = httpx.AsyncClient(
             base_url=base_url,
             verify=False,
-            timeout=30,
+            timeout=httpx.Timeout(60, connect=10),
             headers={
                 "Authorization": f"Bearer {panel.api_token}",
                 "Accept": "application/json",
@@ -47,7 +51,17 @@ class SanaeiClient:
         if not path.startswith("/"):
             path = "/" + path
 
-        response = await self._client.request(method, path, **kwargs)
+        try:
+            response = await self._client.request(method, path, **kwargs)
+        except httpx.TimeoutException as e:
+            raise SanaeiTimeoutError(
+                f"پنل «{self.panel.name}» در زمان مقرر پاسخ نداد (Timeout).\n"
+                f"URL: {path}"
+            ) from e
+        except httpx.HTTPError as e:
+            raise SanaeiApiError(
+                f"خطای ارتباط با پنل «{self.panel.name}»: {type(e).__name__}: {e}"
+            ) from e
 
         try:
             data = response.json()
@@ -120,7 +134,19 @@ class SanaeiClient:
         payload = {"inboundIds": [int(inbound_id)], "client": client_obj}
 
         # ساخت کلاینت
-        data = await self._request("POST", f"{self.api_base}/clients/add", json=payload)
+        try:
+            data = await self._request("POST", f"{self.api_base}/clients/add", json=payload)
+        except SanaeiTimeoutError:
+            # ممکن است پنل کلاینت را ساخته باشد ولی پاسخ دیر رسیده باشد (Timeout).
+            # اگر کلاینت وجود دارد، ادامه می‌دهیم تا کانفیگ تکراری ساخته نشود.
+            try:
+                existing = await self.get_client(email)
+            except SanaeiApiError:
+                existing = None
+            if not existing:
+                raise
+            logger.warning(f"ساخت کلاینت {email} خطا داد اما کلاینت در پنل وجود دارد؛ ادامه می‌دهیم.")
+            data = {"success": True, "recovered": True}
 
         # دریافت اطلاعات واقعی
         actual_client = await self.get_client(email)
@@ -136,17 +162,23 @@ class SanaeiClient:
 
         logger.info(f"subId دریافت شده از پنل: {actual_sub_id}")
 
-        individual_links = await self.get_client_links(email)
-
         # نکته: subLinks در این پنل لیستی از کانفیگ‌های تکی (externalLinks)
         # برمی‌گردونه، نه یک لینک ساب کوتاه HTTPS. برای همین اینا رو فقط
         # به individual_links اضافه می‌کنیم (بدون تکراری) و هرگز به‌عنوان
         # subscription_link اصلی استفاده‌شون نمی‌کنیم.
-        extra_links = []
-        try:
-            extra_links = await self.get_subscription_links(actual_sub_id)
-        except SanaeiApiError as e:
-            logger.warning(f"خطا در دریافت subLinks: {e}")
+        # هر دو درخواست هم‌زمان ارسال می‌شوند.
+        individual_links, extra_links = await asyncio.gather(
+            self.get_client_links(email),
+            self.get_subscription_links(actual_sub_id),
+            return_exceptions=True,
+        )
+        if isinstance(individual_links, BaseException):
+            raise individual_links
+        if isinstance(extra_links, BaseException):
+            if not isinstance(extra_links, SanaeiApiError):
+                raise extra_links
+            logger.warning(f"خطا در دریافت subLinks: {extra_links}")
+            extra_links = []
 
         for link in extra_links:
             if link not in individual_links:

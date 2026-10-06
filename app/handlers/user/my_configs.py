@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from html import escape
 
 from aiogram import Router, F, types
 from aiogram.filters import Command
@@ -18,14 +19,24 @@ from app.keyboards.inline import (
     back_to_menu_keyboard,
 )
 from app.keyboards.user_kb import (
+    BTN_MY_CONFIGS,
     config_items_kb,
     main_menu_kb,
 )
-from app.utils import texts
 from app.utils.callback_data import ConfigListCallback
+from app.utils.qrcode_gen import generate_qr_bytes
 
 
 router = Router()
+
+_LINK_PREFIXES = (
+    "vless://",
+    "vmess://",
+    "trojan://",
+    "ss://",
+    "hy2://",
+    "hysteria://",
+)
 
 
 # ============================================================
@@ -59,27 +70,92 @@ def get_individual_links(
         pass
 
     # برای داده‌های قدیمی
-    if (
-        isinstance(
-            vpn_config.config_link,
-            str,
-        )
-        and vpn_config.config_link.startswith(
-            (
-                "vless://",
-                "vmess://",
-                "trojan://",
-                "ss://",
-                "hy2://",
-                "hysteria://",
-            )
-        )
-    ):
+    if vpn_config.config_link.startswith(_LINK_PREFIXES):
         return [
             vpn_config.config_link
         ]
 
     return []
+
+
+async def _get_user(
+    session: AsyncSession,
+    from_user: types.User,
+) -> User:
+
+    return await get_or_create_user(
+        session,
+        telegram_id=from_user.id,
+        username=from_user.username,
+        full_name=from_user.full_name,
+    )
+
+
+async def _get_owned_config(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    config_id: int,
+) -> VpnConfig | None:
+    """کانفیگ را برمی‌گرداند؛ اگر نبود یا مال کاربر نبود، alert می‌دهد."""
+
+    user = await _get_user(session, callback.from_user)
+
+    vpn_config = await session.get(
+        VpnConfig,
+        config_id,
+    )
+
+    if not vpn_config:
+        await callback.answer(
+            "❌ کانفیگ یافت نشد.",
+            show_alert=True,
+        )
+        return None
+
+    if vpn_config.user_id != user.id:
+        await callback.answer(
+            "❌ شما به این کانفیگ دسترسی ندارید.",
+            show_alert=True,
+        )
+        return None
+
+    return vpn_config
+
+
+async def _send_qr(
+    callback: CallbackQuery,
+    data: str,
+    caption: str,
+    filename: str,
+) -> None:
+
+    photo = BufferedInputFile(
+        generate_qr_bytes(data).read(),
+        filename=filename,
+    )
+
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    # کپشن عکس حداکثر ۱۰۲۴ کاراکتر است
+    if len(caption) > 1024:
+
+        await callback.message.answer_photo(photo=photo)
+
+        await callback.message.answer(
+            caption,
+            reply_markup=back_to_menu_keyboard(),
+        )
+
+    else:
+
+        await callback.message.answer_photo(
+            photo=photo,
+            caption=caption,
+            reply_markup=back_to_menu_keyboard(),
+        )
 
 
 # ============================================================
@@ -95,10 +171,8 @@ async def show_configs_list(
     stmt = (
         select(VpnConfig)
         .where(
-            VpnConfig.user_id == user.id
-        )
-        .where(
-            VpnConfig.expire_at > func.now()
+            VpnConfig.user_id == user.id,
+            VpnConfig.expire_at > func.now(),
         )
         .order_by(
             VpnConfig.created_at.desc()
@@ -124,54 +198,21 @@ async def show_configs_list(
         reply_markup=config_list_keyboard(
             configs
         ),
-        parse_mode="HTML",
     )
 
 
 # ============================================================
-# /my_configs
+# /my_configs و دکمه کانفیگ‌های من
 # ============================================================
 
-@router.message(
-    Command("my_configs")
-)
-async def my_configs_command(
+@router.message(Command("my_configs"))
+@router.message(F.text == BTN_MY_CONFIGS)
+async def my_configs_message(
     message: types.Message,
     session: AsyncSession,
 ):
 
-    user = await get_or_create_user(
-        session,
-        telegram_id=message.from_user.id,
-        username=message.from_user.username,
-        full_name=message.from_user.full_name,
-    )
-
-    await show_configs_list(
-        message,
-        user,
-        session,
-    )
-
-
-# ============================================================
-# دکمه کانفیگ‌های من
-# ============================================================
-
-@router.message(
-    F.text == "📂 کانفیگ‌های من"
-)
-async def my_configs_button(
-    message: types.Message,
-    session: AsyncSession,
-):
-
-    user = await get_or_create_user(
-        session,
-        telegram_id=message.from_user.id,
-        username=message.from_user.username,
-        full_name=message.from_user.full_name,
-    )
+    user = await _get_user(session, message.from_user)
 
     await show_configs_list(
         message,
@@ -194,12 +235,7 @@ async def my_configs_callback(
 
     await callback.answer()
 
-    user = await get_or_create_user(
-        session,
-        telegram_id=callback.from_user.id,
-        username=callback.from_user.username,
-        full_name=callback.from_user.full_name,
-    )
+    user = await _get_user(session, callback.from_user)
 
     await show_configs_list(
         callback.message,
@@ -245,42 +281,25 @@ async def show_config(
     session: AsyncSession,
 ):
 
-    user = await get_or_create_user(
+    vpn_config = await _get_owned_config(
+        callback,
         session,
-        telegram_id=callback.from_user.id,
-        username=callback.from_user.username,
-        full_name=callback.from_user.full_name,
-    )
-
-    vpn_config = await session.get(
-        VpnConfig,
         callback_data.config_id,
     )
 
-    if not vpn_config:
-        await callback.answer(
-            "کانفیگ یافت نشد.",
-            show_alert=True,
-        )
-        return
-
-    if vpn_config.user_id != user.id:
-        await callback.answer(
-            "شما به این کانفیگ دسترسی ندارید.",
-            show_alert=True,
-        )
+    if vpn_config is None:
         return
 
     individual_links = get_individual_links(
         vpn_config
     )
 
-    # اگر هیچ لینک تکی نداریم
+    # اگر هیچ لینک تکی نداریم، فقط Subscription را نشان می‌دهیم
     if not individual_links:
         await callback.message.edit_text(
             "❌ لینک کانفیگ تکی برای این سرویس پیدا نشد.\n\n"
             "می‌توانید Subscription را استفاده کنید.",
-            reply_markup=back_to_menu_keyboard(),
+            reply_markup=config_items_kb(vpn_config.id, 0),
         )
 
         await callback.answer()
@@ -300,16 +319,12 @@ async def show_config(
         else "نامحدود"
     )
 
-    # ========================================================
-    # نمایش اطلاعات سرویس و دکمه‌های کانفیگ تکی
-    # ========================================================
-
     text = (
         "📱 <b>اطلاعات کانفیگ</b>\n\n"
         f"📌 <b>نام:</b> "
-        f"{vpn_config.config_name}\n"
+        f"{escape(vpn_config.config_name)}\n"
         f"📦 <b>پلن:</b> "
-        f"{vpn_config.plan_name}\n"
+        f"{escape(vpn_config.plan_name)}\n"
         f"📊 <b>حجم:</b> "
         f"{traffic_text}\n"
         f"⏳ <b>انقضا:</b> "
@@ -325,7 +340,6 @@ async def show_config(
             vpn_config.id,
             len(individual_links),
         ),
-        parse_mode="HTML",
     )
 
     await callback.answer()
@@ -344,58 +358,31 @@ async def show_single_config(
 ):
 
     try:
-        parts = callback.data.split(":")
+        _, raw_config_id, raw_index = callback.data.split(":")
+        config_id = int(raw_config_id)
+        index = int(raw_index)
 
-        if len(parts) != 3:
-            raise ValueError
-
-        config_id = int(parts[1])
-        index = int(parts[2])
-
-    except (
-        ValueError,
-        TypeError,
-    ):
+    except ValueError:
         await callback.answer(
             "❌ اطلاعات کانفیگ نامعتبر است.",
             show_alert=True,
         )
         return
 
-    user = await get_or_create_user(
+    vpn_config = await _get_owned_config(
+        callback,
         session,
-        telegram_id=callback.from_user.id,
-        username=callback.from_user.username,
-        full_name=callback.from_user.full_name,
-    )
-
-    vpn_config = await session.get(
-        VpnConfig,
         config_id,
     )
 
-    if not vpn_config:
-        await callback.answer(
-            "❌ کانفیگ یافت نشد.",
-            show_alert=True,
-        )
-        return
-
-    if vpn_config.user_id != user.id:
-        await callback.answer(
-            "❌ شما به این کانفیگ دسترسی ندارید.",
-            show_alert=True,
-        )
+    if vpn_config is None:
         return
 
     individual_links = get_individual_links(
         vpn_config
     )
 
-    if (
-        index < 0
-        or index >= len(individual_links)
-    ):
+    if not 0 <= index < len(individual_links):
         await callback.answer(
             "❌ لینک کانفیگ پیدا نشد.",
             show_alert=True,
@@ -404,87 +391,22 @@ async def show_single_config(
 
     link = individual_links[index]
 
-    # ========================================================
-    # QR Code
-    # ========================================================
+    await callback.answer()
 
-    try:
-        import qrcode
-        from io import BytesIO
-
-        qr = qrcode.QRCode(
-            box_size=10,
-            border=2,
-        )
-
-        qr.add_data(link)
-        qr.make(fit=True)
-
-        img = qr.make_image(
-            fill_color="black",
-            back_color="white",
-        )
-
-        bio = BytesIO()
-
-        img.save(
-            bio,
-            "PNG",
-        )
-
-        bio.seek(0)
-
-        await callback.message.delete()
-
-        caption = (
+    await _send_qr(
+        callback,
+        link,
+        (
             "📱 <b>کانفیگ تکی</b>\n\n"
             f"📌 <b>نام:</b> "
-            f"{vpn_config.config_name}\n"
+            f"{escape(vpn_config.config_name)}\n"
             f"🔢 <b>کانفیگ:</b> "
             f"{index + 1}\n\n"
             "🔗 <b>لینک:</b>\n"
-            f"<code>{link}</code>"
-        )
-
-        if len(caption) > 1024:
-
-            await callback.message.answer_photo(
-                photo=BufferedInputFile(
-                    bio.read(),
-                    filename="config_qr.png",
-                ),
-            )
-
-            await callback.message.answer(
-                caption,
-                reply_markup=back_to_menu_keyboard(),
-                parse_mode="HTML",
-            )
-
-        else:
-
-            await callback.message.answer_photo(
-                photo=BufferedInputFile(
-                    bio.read(),
-                    filename="config_qr.png",
-                ),
-                caption=caption,
-                reply_markup=back_to_menu_keyboard(),
-                parse_mode="HTML",
-            )
-
-    except ImportError:
-
-        await callback.message.edit_text(
-            "📱 <b>کانفیگ تکی</b>\n\n"
-            f"📌 <b>نام:</b> "
-            f"{vpn_config.config_name}\n\n"
-            f"<code>{link}</code>",
-            reply_markup=back_to_menu_keyboard(),
-            parse_mode="HTML",
-        )
-
-    await callback.answer()
+            f"<code>{escape(link)}</code>"
+        ),
+        "config_qr.png",
+    )
 
 
 # ============================================================
@@ -514,30 +436,13 @@ async def show_subscription(
         )
         return
 
-    user = await get_or_create_user(
+    vpn_config = await _get_owned_config(
+        callback,
         session,
-        telegram_id=callback.from_user.id,
-        username=callback.from_user.username,
-        full_name=callback.from_user.full_name,
-    )
-
-    vpn_config = await session.get(
-        VpnConfig,
         config_id,
     )
 
-    if not vpn_config:
-        await callback.answer(
-            "❌ کانفیگ یافت نشد.",
-            show_alert=True,
-        )
-        return
-
-    if vpn_config.user_id != user.id:
-        await callback.answer(
-            "❌ شما به این کانفیگ دسترسی ندارید.",
-            show_alert=True,
-        )
+    if vpn_config is None:
         return
 
     subscription_link = (
@@ -551,82 +456,16 @@ async def show_subscription(
         )
         return
 
-    # ========================================================
-    # QR Subscription
-    # ========================================================
+    await callback.answer()
 
-    try:
-        import qrcode
-        from io import BytesIO
-
-        qr = qrcode.QRCode(
-            box_size=10,
-            border=2,
-        )
-
-        qr.add_data(
-            subscription_link
-        )
-
-        qr.make(fit=True)
-
-        img = qr.make_image(
-            fill_color="black",
-            back_color="white",
-        )
-
-        bio = BytesIO()
-
-        img.save(
-            bio,
-            "PNG",
-        )
-
-        bio.seek(0)
-
-        await callback.message.delete()
-
-        caption = (
+    await _send_qr(
+        callback,
+        subscription_link,
+        (
             "🔗 <b>Subscription</b>\n\n"
             f"📌 <b>نام کانفیگ:</b> "
-            f"{vpn_config.config_name}\n\n"
-            f"<code>{subscription_link}</code>"
-        )
-
-        if len(caption) > 1024:
-
-            await callback.message.answer_photo(
-                photo=BufferedInputFile(
-                    bio.read(),
-                    filename="subscription_qr.png",
-                ),
-            )
-
-            await callback.message.answer(
-                caption,
-                reply_markup=back_to_menu_keyboard(),
-                parse_mode="HTML",
-            )
-
-        else:
-
-            await callback.message.answer_photo(
-                photo=BufferedInputFile(
-                    bio.read(),
-                    filename="subscription_qr.png",
-                ),
-                caption=caption,
-                reply_markup=back_to_menu_keyboard(),
-                parse_mode="HTML",
-            )
-
-    except ImportError:
-
-        await callback.message.edit_text(
-            "🔗 <b>Subscription</b>\n\n"
-            f"<code>{subscription_link}</code>",
-            reply_markup=back_to_menu_keyboard(),
-            parse_mode="HTML",
-        )
-
-    await callback.answer()
+            f"{escape(vpn_config.config_name)}\n\n"
+            f"<code>{escape(subscription_link)}</code>"
+        ),
+        "subscription_qr.png",
+    )

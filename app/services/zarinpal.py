@@ -12,6 +12,27 @@ class ZarinpalError(RuntimeError):
     pass
 
 
+async def _post(path: str, payload: dict) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(f"{_BASE}{path}", json=payload)
+        data = resp.json()
+    except httpx.HTTPError as e:
+        raise ZarinpalError(f"خطای ارتباط با زرین‌پال: {type(e).__name__}") from e
+    except ValueError as e:
+        raise ZarinpalError("پاسخ نامعتبر از زرین‌پال.") from e
+
+    if not isinstance(data, dict):
+        raise ZarinpalError("پاسخ نامعتبر از زرین‌پال.")
+    return data
+
+
+def _result(data: dict) -> dict:
+    # زرین‌پال در حالت خطا data را لیست خالی برمی‌گرداند
+    result = data.get("data")
+    return result if isinstance(result, dict) else {}
+
+
 async def request_payment(amount_toman: int, description: str, order_id: int) -> tuple[str, str]:
     """
     یک تراکنش پرداخت می‌سازد و (authority, پرداخت‌لینک) را برمی‌گرداند.
@@ -23,13 +44,10 @@ async def request_payment(amount_toman: int, description: str, order_id: int) ->
         "description": description,
         "callback_url": callback_url,
     }
-    async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.post(f"{_BASE}/payment/request.json", json=payload)
-    data = resp.json()
-    result = data.get("data", {})
+    data = await _post("/payment/request.json", payload)
+    result = _result(data)
     if result.get("code") != 100:
-        errors = data.get("errors", {})
-        raise ZarinpalError(f"خطا در ایجاد تراکنش زرین‌پال: {errors}")
+        raise ZarinpalError(f"خطا در ایجاد تراکنش زرین‌پال: {data.get('errors', {})}")
 
     authority = result["authority"]
     pay_link = f"{_STARTPAY_BASE}/{authority}"
@@ -45,11 +63,8 @@ async def verify_payment(amount_toman: int, authority: str) -> str:
         "amount": amount_toman * 10,
         "authority": authority,
     }
-    async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.post(f"{_BASE}/payment/verify.json", json=payload)
-    data = resp.json()
-    result = data.get("data", {})
+    data = await _post("/payment/verify.json", payload)
+    result = _result(data)
     if result.get("code") not in (100, 101):
-        errors = data.get("errors", {})
-        raise ZarinpalError(f"وریفای پرداخت ناموفق بود: {errors}")
+        raise ZarinpalError(f"وریفای پرداخت ناموفق بود: {data.get('errors', {})}")
     return str(result.get("ref_id"))

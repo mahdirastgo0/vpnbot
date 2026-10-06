@@ -17,14 +17,24 @@ PLAN_TYPE_LABELS = {
 }
 
 
+BTN_BUY = "🛒 خرید سرویس"
+BTN_TRIAL = "🎁 سرویس تست رایگان"
+BTN_MY_CONFIGS = "📂 کانفیگ‌های من"
+BTN_SUPPORT = "🎧 پشتیبانی"
+
+# متن دکمه‌های منوی اصلی؛ در stateهایی که منتظر متن هستیم
+# نباید به‌عنوان ورودی (نام کانفیگ / TxID) ذخیره شوند.
+MENU_BUTTONS = frozenset({BTN_BUY, BTN_TRIAL, BTN_MY_CONFIGS, BTN_SUPPORT})
+
+
 def main_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🛒 خرید سرویس")],
-            [KeyboardButton(text="🎁 سرویس تست رایگان")],
+            [KeyboardButton(text=BTN_BUY)],
+            [KeyboardButton(text=BTN_TRIAL)],
             [
-                KeyboardButton(text="📂 کانفیگ‌های من"),
-                KeyboardButton(text="🎧 پشتیبانی"),
+                KeyboardButton(text=BTN_MY_CONFIGS),
+                KeyboardButton(text=BTN_SUPPORT),
             ],
         ],
         resize_keyboard=True,
@@ -289,6 +299,15 @@ def config_items_kb(
             InlineKeyboardButton(
                 text="🔗 Subscription",
                 callback_data=f"show_subscription:{config_id}",
+            )
+        ]
+    )
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🔙 بازگشت",
+                callback_data="my_configs",
             )
         ]
     )
