@@ -103,13 +103,113 @@ class SanaeiClient:
         return data
 
     async def add_client(
+    self,
+    email: str,
+    traffic_gb: int,
+    duration_days: int,
+    inbound_id: int | None = None,
+    traffic_mb: int | None = None,
+) -> dict:
+    import json
+
+    inbound_id = inbound_id if inbound_id is not None else self.panel.inbound_id
+    if inbound_id is None:
+        raise SanaeiApiError("Inbound ID برای این پنل مشخص نشده است.")
+
+    email = (email or "").strip()
+    if not email:
+        raise SanaeiApiError("نام کانفیگ / email خالی است.")
+
+    client_uuid = str(uuid.uuid4())
+
+    if traffic_mb is not None and traffic_mb > 0:
+        total_bytes = traffic_mb * 1024 * 1024
+    elif traffic_gb and traffic_gb > 0:
+        total_bytes = traffic_gb * 1024 * 1024 * 1024
+    else:
+        total_bytes = 0
+
+    expire_ms = (
+        int((datetime.now(timezone.utc) + timedelta(days=duration_days)).timestamp() * 1000)
+        if duration_days and duration_days > 0
+        else 0
+    )
+
+    requested_sub_id = uuid.uuid4().hex[:16]
+
+    # ============ 3x-ui استاندارد ============
+    client_entry = {
+        "id": client_uuid,
+        "flow": "",
+        "email": email,
+        "limitIp": 0,
+        "totalGB": total_bytes,
+        "expiryTime": expire_ms,
+        "enable": True,
+        "tgId": "",
+        "subId": requested_sub_id,
+        "reset": 0,
+    }
+
+    settings_json = json.dumps(
+        {"clients": [client_entry]},
+        ensure_ascii=False,
+    )
+
+    payload = {
+        "id": int(inbound_id),
+        "settings": settings_json,
+    }
+
+    # ============ POST به /inbounds/addClient ============
+    await self._request(
+        "POST",
+        f"{self.api_base}/inbounds/addClient",
+        json=payload,
+    )
+
+    # ============ حالا اطلاعات واقعی رو بخون ============
+    actual_client = await self.get_client(email)
+    if not actual_client:
+        raise SanaeiApiError("کلاینت ساخته شد اما اطلاعات آن از پنل قابل دریافت نیست.")
+
+    client_info = actual_client.get("client", {}) or actual_client
+    actual_uuid = client_info.get("id") or client_info.get("uuid") or client_uuid
+    actual_sub_id = (
+        client_info.get("subId")
+        or client_info.get("sub_id")
+        or requested_sub_id
+    )
+
+    logger.info(f"client ساخته شد | email={email} | uuid={actual_uuid} | subId={actual_sub_id}")
+
+    # لینک ساب
+    subscription_link = self.build_subscription_url(actual_sub_id)
+    if not subscription_link:
+        hostname = self._extract_hostname()
+        if hostname:
+            subscription_link = f"https://{hostname}:2096/sub/{quote(str(actual_sub_id))}"
+        else:
+            raise SanaeiApiError("امکان ساخت لینک Subscription نیست.")
+
+    return {
+        "client_uuid": str(actual_uuid),
+        "email": email,
+        "sub_id": str(actual_sub_id),
+        "inbound_id": int(inbound_id),
+        "subscription_link": subscription_link,
+        "subscription_links": [],
+        "individual_links": [],
+        "response": {},
+        "client": actual_client,
+    }
         self,
         email: str,
         traffic_gb: int,
         duration_days: int,
         inbound_id: int | None = None,
         traffic_mb: int | None = None,
-    ) -> dict:
+        ) -> dict:
         inbound_id = inbound_id if inbound_id is not None else self.panel.inbound_id
         if inbound_id is None:
             raise SanaeiApiError("Inbound ID برای این پنل مشخص نشده است.")
@@ -222,53 +322,54 @@ class SanaeiClient:
         }
 
     async def get_client(self, email: str) -> dict | None:
+    import json
+
+    inbound_id = self.panel.inbound_id
+    if not inbound_id:
+        return None
+
+    data = await self._request(
+        "GET",
+        f"{self.api_base}/inbounds/get/{inbound_id}",
+    )
+
+    obj = data.get("obj") or {}
+
+    # جستجو در clientStats
+    for stat in (obj.get("clientStats") or []):
+        if stat.get("email") == email:
+            return {
+                "client": {
+                    "id": stat.get("id") or stat.get("uuid"),
+                    "email": email,
+                    "subId": stat.get("subId"),
+                }
+            }
+
+    # جستجو در settings.clients
+    settings_raw = obj.get("settings")
+    if settings_raw:
+        try:
+            settings = json.loads(settings_raw)
+            for c in settings.get("clients", []):
+                if c.get("email") == email:
+                    return {"client": c}
+        except Exception as e:
+            logger.warning(f"parse settings failed: {e}")
+
+    return None
         data = await self._request("GET", f"{self.api_base}/clients/get/{quote(email)}")
         if not isinstance(data, dict):
             return None
         return data.get("obj")
 
     async def get_client_links(self, email: str) -> list[str]:
-        data = await self._request("GET", f"{self.api_base}/clients/links/{quote(email)}")
-        if not isinstance(data, dict):
-            return []
-        obj = data.get("obj")
-        if not isinstance(obj, list):
-            return []
-        links = []
-        for item in obj:
-            if isinstance(item, str) and item.strip().startswith(("vless://", "vmess://", "trojan://", "ss://", "hy2://", "hysteria://")):
-                links.append(item.strip())
-        return links
+    # این endpoint در 3x-ui استاندارد نیست
+    return []
 
     async def get_subscription_links(self, sub_id: str) -> list[str]:
-        """
-        نکته مهم: اندپوینت subLinks در این پنل، برخلاف انتظار،
-        یک لیست از رشتههای لینک برنمیگردونه؛ یک dict با ساختار
-        {"client": {...}, "externalLinks": [...], "inboundIds": [...], "usedTraffic": ...}
-        برمیگردونه. اینجا هر دو حالت رو پشتیبانی میکنیم تا اگه پنل
-        یا نسخهی دیگهای فرمت متفاوتی داد، کد کرش نکنه.
-        """
-        data = await self._request("GET", f"{self.api_base}/clients/subLinks/{quote(str(sub_id))}")
-        if not isinstance(data, dict):
-            return []
-
-        obj = data.get("obj")
-
-        # حالت قدیمی/فرضی: obj خودش یک لیست از لینکهاست
-        candidates: list = []
-        if isinstance(obj, list):
-            candidates = obj
-        # حالت واقعی این پنل: obj یک dict هست و لینکها (اگر باشن) زیر externalLinks میان
-        elif isinstance(obj, dict):
-            external = obj.get("externalLinks")
-            if isinstance(external, list):
-                candidates = external
-
-        links = []
-        for item in candidates:
-            if isinstance(item, str) and item.strip().startswith(("vless://", "vmess://", "trojan://", "ss://", "hy2://", "hysteria://")):
-                links.append(item.strip())
-        return links
+    # 3x-ui استاندارد این رو نداره
+    return []
 
     def build_subscription_url(self, sub_id: str) -> str | None:
         subscription_base = getattr(self.panel, "subscription_url", None)
