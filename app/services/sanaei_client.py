@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlparse
@@ -25,15 +26,8 @@ class SanaeiClient:
 
     def __init__(self, panel: PanelConfig):
         self.panel = panel
-
         base_url = panel.url.rstrip("/")
-
-        api_base = getattr(
-            panel,
-            "api_base_path",
-            "/panel/api",
-        ).strip("/")
-
+        api_base = getattr(panel, "api_base_path", "/panel/api").strip("/")
         self.api_base = f"/{api_base}"
 
         self._client = httpx.AsyncClient(
@@ -55,20 +49,15 @@ class SanaeiClient:
             response = await self._client.request(method, path, **kwargs)
         except httpx.ConnectTimeout as e:
             raise SanaeiTimeoutError(
-                f"اتصال به پنل «{self.panel.name}» برقرار نشد (ConnectTimeout).\n"
-                "سرور ربات به آدرس/پورت پنل دسترسی ندارد (فایروال، فیلترینگ یا آدرس اشتباه).\n"
-                f"URL: {path}"
+                f"اتصال به پنل «{self.panel.name}» برقرار نشد (ConnectTimeout)."
             ) from e
         except httpx.TimeoutException as e:
             raise SanaeiTimeoutError(
-                f"پنل «{self.panel.name}» درخواست را دریافت کرد اما پاسخ نداد "
-                f"({type(e).__name__}).\n"
-                "اتصال برقرار است؛ مشکل از کندی/هنگ کردن خود پنل است.\n"
-                f"URL: {path}"
+                f"پنل «{self.panel.name}» پاسخ نداد ({type(e).__name__})."
             ) from e
         except httpx.HTTPError as e:
             raise SanaeiApiError(
-                f"خطای ارتباط با پنل «{self.panel.name}»: {type(e).__name__}: {e}"
+                f"خطای ارتباط با پنل: {type(e).__name__}: {e}"
             ) from e
 
         try:
@@ -84,230 +73,105 @@ class SanaeiClient:
         if response.status_code == 401:
             raise SanaeiApiError(f"احراز هویت پنل «{self.panel.name}» رد شد.")
         if response.status_code == 404:
-            raise SanaeiApiError(
-                "Endpoint پنل پیدا نشد.\n"
-                f"URL: {response.url}\n"
-                "HTTP: 404"
-            )
+            raise SanaeiApiError(f"Endpoint پیدا نشد (404).\nURL: {response.url}")
         if response.status_code >= 400:
             raise SanaeiApiError(
-                f"خطای HTTP پنل «{self.panel.name}»:\n"
-                f"HTTP: {response.status_code}\n"
-                f"{data}"
+                f"HTTP {response.status_code}:\n{data}"
             )
         if isinstance(data, dict) and data.get("success") is False:
             raise SanaeiApiError(
-                f"خطای پنل «{self.panel.name}»: {data.get('msg', data)}"
+                f"خطای پنل: {data.get('msg', data)}"
             )
 
         return data
 
     async def add_client(
-    self,
-    email: str,
-    traffic_gb: int,
-    duration_days: int,
-    inbound_id: int | None = None,
-    traffic_mb: int | None = None,
-) -> dict:
-    import json
-
-    inbound_id = inbound_id if inbound_id is not None else self.panel.inbound_id
-    if inbound_id is None:
-        raise SanaeiApiError("Inbound ID برای این پنل مشخص نشده است.")
-
-    email = (email or "").strip()
-    if not email:
-        raise SanaeiApiError("نام کانفیگ / email خالی است.")
-
-    client_uuid = str(uuid.uuid4())
-
-    if traffic_mb is not None and traffic_mb > 0:
-        total_bytes = traffic_mb * 1024 * 1024
-    elif traffic_gb and traffic_gb > 0:
-        total_bytes = traffic_gb * 1024 * 1024 * 1024
-    else:
-        total_bytes = 0
-
-    expire_ms = (
-        int((datetime.now(timezone.utc) + timedelta(days=duration_days)).timestamp() * 1000)
-        if duration_days and duration_days > 0
-        else 0
-    )
-
-    requested_sub_id = uuid.uuid4().hex[:16]
-
-    # ============ 3x-ui استاندارد ============
-    client_entry = {
-        "id": client_uuid,
-        "flow": "",
-        "email": email,
-        "limitIp": 0,
-        "totalGB": total_bytes,
-        "expiryTime": expire_ms,
-        "enable": True,
-        "tgId": "",
-        "subId": requested_sub_id,
-        "reset": 0,
-    }
-
-    settings_json = json.dumps(
-        {"clients": [client_entry]},
-        ensure_ascii=False,
-    )
-
-    payload = {
-        "id": int(inbound_id),
-        "settings": settings_json,
-    }
-
-    # ============ POST به /inbounds/addClient ============
-    await self._request(
-        "POST",
-        f"{self.api_base}/inbounds/addClient",
-        json=payload,
-    )
-
-    # ============ حالا اطلاعات واقعی رو بخون ============
-    actual_client = await self.get_client(email)
-    if not actual_client:
-        raise SanaeiApiError("کلاینت ساخته شد اما اطلاعات آن از پنل قابل دریافت نیست.")
-
-    client_info = actual_client.get("client", {}) or actual_client
-    actual_uuid = client_info.get("id") or client_info.get("uuid") or client_uuid
-    actual_sub_id = (
-        client_info.get("subId")
-        or client_info.get("sub_id")
-        or requested_sub_id
-    )
-
-    logger.info(f"client ساخته شد | email={email} | uuid={actual_uuid} | subId={actual_sub_id}")
-
-    # لینک ساب
-    subscription_link = self.build_subscription_url(actual_sub_id)
-    if not subscription_link:
-        hostname = self._extract_hostname()
-        if hostname:
-            subscription_link = f"https://{hostname}:2096/sub/{quote(str(actual_sub_id))}"
-        else:
-            raise SanaeiApiError("امکان ساخت لینک Subscription نیست.")
-
-    return {
-        "client_uuid": str(actual_uuid),
-        "email": email,
-        "sub_id": str(actual_sub_id),
-        "inbound_id": int(inbound_id),
-        "subscription_link": subscription_link,
-        "subscription_links": [],
-        "individual_links": [],
-        "response": {},
-        "client": actual_client,
-    }
         self,
         email: str,
         traffic_gb: int,
         duration_days: int,
         inbound_id: int | None = None,
         traffic_mb: int | None = None,
-        ) -> dict:
+    ) -> dict:
+
         inbound_id = inbound_id if inbound_id is not None else self.panel.inbound_id
         if inbound_id is None:
-            raise SanaeiApiError("Inbound ID برای این پنل مشخص نشده است.")
+            raise SanaeiApiError("Inbound ID مشخص نشده است.")
 
         email = (email or "").strip()
         if not email:
-            raise SanaeiApiError("نام کانفیگ / email خالی است.")
+            raise SanaeiApiError("email خالی است.")
 
         client_uuid = str(uuid.uuid4())
+
         if traffic_mb is not None and traffic_mb > 0:
             total_bytes = traffic_mb * 1024 * 1024
         elif traffic_gb and traffic_gb > 0:
             total_bytes = traffic_gb * 1024 * 1024 * 1024
         else:
             total_bytes = 0
-        expire_ms = int((datetime.now(timezone.utc) + timedelta(days=duration_days)).timestamp() * 1000) if duration_days and duration_days > 0 else 0
+
+        expire_ms = (
+            int((datetime.now(timezone.utc) + timedelta(days=duration_days)).timestamp() * 1000)
+            if duration_days and duration_days > 0
+            else 0
+        )
+
         requested_sub_id = uuid.uuid4().hex[:16]
 
-        client_obj = {
+        # ============ payload استاندارد 3x-ui ============
+        client_entry = {
             "id": client_uuid,
+            "flow": "",
             "email": email,
             "limitIp": 0,
             "totalGB": total_bytes,
             "expiryTime": expire_ms,
             "enable": True,
-            "tgId": 0,
+            "tgId": "",
             "subId": requested_sub_id,
+            "reset": 0,
         }
 
-        payload = {"inboundIds": [int(inbound_id)], "client": client_obj}
+        settings_json = json.dumps(
+            {"clients": [client_entry]},
+            ensure_ascii=False,
+        )
 
-        # ساخت کلاینت
-        try:
-            data = await self._request("POST", f"{self.api_base}/clients/add", json=payload)
-        except SanaeiTimeoutError:
-            # ممکن است پنل کلاینت را ساخته باشد ولی پاسخ دیر رسیده باشد (Timeout).
-            # اگر کلاینت وجود دارد، ادامه میدهیم تا کانفیگ تکراری ساخته نشود.
-            try:
-                existing = await self.get_client(email)
-            except SanaeiApiError:
-                existing = None
-            if not existing:
-                raise
-            logger.warning(f"ساخت کلاینت {email} خطا داد اما کلاینت در پنل وجود دارد؛ ادامه میدهیم.")
-            data = {"success": True, "recovered": True}
+        payload = {
+            "id": int(inbound_id),
+            "settings": settings_json,
+        }
 
-        # دریافت اطلاعات واقعی
+        # ============ POST /inbounds/addClient ============
+        await self._request(
+            "POST",
+            f"{self.api_base}/inbounds/addClient",
+            json=payload,
+        )
+
+        # ============ اطلاعات واقعی ============
         actual_client = await self.get_client(email)
         if not actual_client:
-            raise SanaeiApiError("کلاینت ساخته شد اما اطلاعات آن از پنل قابل دریافت نیست.")
+            raise SanaeiApiError("کلاینت ساخته شد اما اطلاعات دریافت نشد.")
 
-        client_info = actual_client.get("client", {})
-        actual_uuid = client_info.get("uuid") or client_info.get("id") or actual_client.get("uuid") or actual_client.get("id") or client_uuid
-        actual_sub_id = client_info.get("subId") or client_info.get("subID") or client_info.get("sub_id") or actual_client.get("subId") or actual_client.get("subID") or actual_client.get("sub_id")
-
-        if not actual_sub_id:
-            raise SanaeiApiError("کلاینت ساخته شد اما subId واقعی از پنل دریافت نشد.")
-
-        logger.info(f"subId دریافت شده از پنل: {actual_sub_id}")
-
-        # نکته: subLinks در این پنل لیستی از کانفیگهای تکی (externalLinks)
-        # برمیگردونه، نه یک لینک ساب کوتاه HTTPS. برای همین اینا رو فقط
-        # به individual_links اضافه میکنیم (بدون تکراری) و هرگز بهعنوان
-        # subscription_link اصلی استفادهشون نمیکنیم.
-        # هر دو درخواست همزمان ارسال میشوند.
-        individual_links, extra_links = await asyncio.gather(
-            self.get_client_links(email),
-            self.get_subscription_links(actual_sub_id),
-            return_exceptions=True,
+        client_info = actual_client.get("client", {}) or actual_client
+        actual_uuid = client_info.get("id") or client_info.get("uuid") or client_uuid
+        actual_sub_id = (
+            client_info.get("subId")
+            or client_info.get("sub_id")
+            or requested_sub_id
         )
-        if isinstance(individual_links, BaseException):
-            raise individual_links
-        if isinstance(extra_links, BaseException):
-            if not isinstance(extra_links, SanaeiApiError):
-                raise extra_links
-            logger.warning(f"خطا در دریافت subLinks: {extra_links}")
-            extra_links = []
 
-        for link in extra_links:
-            if link not in individual_links:
-                individual_links.append(link)
+        logger.info(f"client ساخته شد | email={email} | subId={actual_sub_id}")
 
-        # لینک ساب همیشه از روی sub-path اختصاصی پنل ساخته میشه، نه از پاسخ subLinks
         subscription_link = self.build_subscription_url(actual_sub_id)
-
         if not subscription_link:
             hostname = self._extract_hostname()
             if hostname:
                 subscription_link = f"https://{hostname}:2096/sub/{quote(str(actual_sub_id))}"
-                logger.warning(
-                    "لینک سابسکریپشن با fallback نهایی (بدون sub-path اختصاصی پنل) ساخته شد: "
-                    f"{subscription_link} — برای رفع این مشکل PANEL_{self.panel.key}_SUBSCRIPTION_URL "
-                    "را در .env تنظیم کنید."
-                )
             else:
-                raise SanaeiApiError(
-                    f"امکان ساخت لینک Subscription وجود ندارد. subId: {actual_sub_id}, panel.url: {self.panel.url}"
-                )
+                raise SanaeiApiError("امکان ساخت لینک Subscription نیست.")
 
         return {
             "client_uuid": str(actual_uuid),
@@ -315,61 +179,51 @@ class SanaeiClient:
             "sub_id": str(actual_sub_id),
             "inbound_id": int(inbound_id),
             "subscription_link": subscription_link,
-            "subscription_links": extra_links,
-            "individual_links": individual_links,
-            "response": data,
+            "subscription_links": [],
+            "individual_links": [],
+            "response": {},
             "client": actual_client,
         }
 
     async def get_client(self, email: str) -> dict | None:
-    import json
+        inbound_id = self.panel.inbound_id
+        if not inbound_id:
+            return None
 
-    inbound_id = self.panel.inbound_id
-    if not inbound_id:
+        data = await self._request(
+            "GET",
+            f"{self.api_base}/inbounds/get/{inbound_id}",
+        )
+
+        obj = data.get("obj") or {}
+
+        for stat in (obj.get("clientStats") or []):
+            if stat.get("email") == email:
+                return {
+                    "client": {
+                        "id": stat.get("id") or stat.get("uuid"),
+                        "email": email,
+                        "subId": stat.get("subId"),
+                    }
+                }
+
+        settings_raw = obj.get("settings")
+        if settings_raw:
+            try:
+                settings = json.loads(settings_raw)
+                for c in settings.get("clients", []):
+                    if c.get("email") == email:
+                        return {"client": c}
+            except Exception as e:
+                logger.warning(f"parse settings failed: {e}")
+
         return None
 
-    data = await self._request(
-        "GET",
-        f"{self.api_base}/inbounds/get/{inbound_id}",
-    )
-
-    obj = data.get("obj") or {}
-
-    # جستجو در clientStats
-    for stat in (obj.get("clientStats") or []):
-        if stat.get("email") == email:
-            return {
-                "client": {
-                    "id": stat.get("id") or stat.get("uuid"),
-                    "email": email,
-                    "subId": stat.get("subId"),
-                }
-            }
-
-    # جستجو در settings.clients
-    settings_raw = obj.get("settings")
-    if settings_raw:
-        try:
-            settings = json.loads(settings_raw)
-            for c in settings.get("clients", []):
-                if c.get("email") == email:
-                    return {"client": c}
-        except Exception as e:
-            logger.warning(f"parse settings failed: {e}")
-
-    return None
-        data = await self._request("GET", f"{self.api_base}/clients/get/{quote(email)}")
-        if not isinstance(data, dict):
-            return None
-        return data.get("obj")
-
     async def get_client_links(self, email: str) -> list[str]:
-    # این endpoint در 3x-ui استاندارد نیست
-    return []
+        return []
 
     async def get_subscription_links(self, sub_id: str) -> list[str]:
-    # 3x-ui استاندارد این رو نداره
-    return []
+        return []
 
     def build_subscription_url(self, sub_id: str) -> str | None:
         subscription_base = getattr(self.panel, "subscription_url", None)
@@ -387,19 +241,17 @@ class SanaeiClient:
         return parsed.hostname
 
     async def get_client_traffic(self, email: str) -> dict | None:
-        data = await self._request("GET", f"{self.api_base}/clients/traffic/{quote(email)}")
-        if isinstance(data, dict):
-            return data.get("obj")
         return None
 
     async def delete_client(self, inbound_id: int, client_uuid: str) -> None:
-        await self._request("POST", f"{self.api_base}/inbounds/{inbound_id}/delClient/{client_uuid}")
+        await self._request(
+            "POST",
+            f"{self.api_base}/inbounds/{inbound_id}/delClient/{client_uuid}",
+        )
 
     async def close(self) -> None:
         await self._client.aclose()
 
 
-# Legacy function
 def build_config_link(panel: PanelConfig, inbound: dict, client_uuid: str, email: str) -> str:
-    # ... (همان کد قبلی)
-    pass
+    return ""
