@@ -53,9 +53,17 @@ class SanaeiClient:
 
         try:
             response = await self._client.request(method, path, **kwargs)
+        except httpx.ConnectTimeout as e:
+            raise SanaeiTimeoutError(
+                f"اتصال به پنل «{self.panel.name}» برقرار نشد (ConnectTimeout).\n"
+                "سرور ربات به آدرس/پورت پنل دسترسی ندارد (فایروال، فیلترینگ یا آدرس اشتباه).\n"
+                f"URL: {path}"
+            ) from e
         except httpx.TimeoutException as e:
             raise SanaeiTimeoutError(
-                f"پنل «{self.panel.name}» در زمان مقرر پاسخ نداد (Timeout).\n"
+                f"پنل «{self.panel.name}» درخواست را دریافت کرد اما پاسخ نداد "
+                f"({type(e).__name__}).\n"
+                "اتصال برقرار است؛ مشکل از کندی/هنگ کردن خود پنل است.\n"
                 f"URL: {path}"
             ) from e
         except httpx.HTTPError as e:
@@ -138,14 +146,14 @@ class SanaeiClient:
             data = await self._request("POST", f"{self.api_base}/clients/add", json=payload)
         except SanaeiTimeoutError:
             # ممکن است پنل کلاینت را ساخته باشد ولی پاسخ دیر رسیده باشد (Timeout).
-            # اگر کلاینت وجود دارد، ادامه می‌دهیم تا کانفیگ تکراری ساخته نشود.
+            # اگر کلاینت وجود دارد، ادامه میدهیم تا کانفیگ تکراری ساخته نشود.
             try:
                 existing = await self.get_client(email)
             except SanaeiApiError:
                 existing = None
             if not existing:
                 raise
-            logger.warning(f"ساخت کلاینت {email} خطا داد اما کلاینت در پنل وجود دارد؛ ادامه می‌دهیم.")
+            logger.warning(f"ساخت کلاینت {email} خطا داد اما کلاینت در پنل وجود دارد؛ ادامه میدهیم.")
             data = {"success": True, "recovered": True}
 
         # دریافت اطلاعات واقعی
@@ -162,11 +170,11 @@ class SanaeiClient:
 
         logger.info(f"subId دریافت شده از پنل: {actual_sub_id}")
 
-        # نکته: subLinks در این پنل لیستی از کانفیگ‌های تکی (externalLinks)
-        # برمی‌گردونه، نه یک لینک ساب کوتاه HTTPS. برای همین اینا رو فقط
-        # به individual_links اضافه می‌کنیم (بدون تکراری) و هرگز به‌عنوان
-        # subscription_link اصلی استفاده‌شون نمی‌کنیم.
-        # هر دو درخواست هم‌زمان ارسال می‌شوند.
+        # نکته: subLinks در این پنل لیستی از کانفیگهای تکی (externalLinks)
+        # برمیگردونه، نه یک لینک ساب کوتاه HTTPS. برای همین اینا رو فقط
+        # به individual_links اضافه میکنیم (بدون تکراری) و هرگز بهعنوان
+        # subscription_link اصلی استفادهشون نمیکنیم.
+        # هر دو درخواست همزمان ارسال میشوند.
         individual_links, extra_links = await asyncio.gather(
             self.get_client_links(email),
             self.get_subscription_links(actual_sub_id),
@@ -184,7 +192,7 @@ class SanaeiClient:
             if link not in individual_links:
                 individual_links.append(link)
 
-        # لینک ساب همیشه از روی sub-path اختصاصی پنل ساخته می‌شه، نه از پاسخ subLinks
+        # لینک ساب همیشه از روی sub-path اختصاصی پنل ساخته میشه، نه از پاسخ subLinks
         subscription_link = self.build_subscription_url(actual_sub_id)
 
         if not subscription_link:
@@ -235,10 +243,10 @@ class SanaeiClient:
     async def get_subscription_links(self, sub_id: str) -> list[str]:
         """
         نکته مهم: اندپوینت subLinks در این پنل، برخلاف انتظار،
-        یک لیست از رشته‌های لینک برنمی‌گردونه؛ یک dict با ساختار
+        یک لیست از رشتههای لینک برنمیگردونه؛ یک dict با ساختار
         {"client": {...}, "externalLinks": [...], "inboundIds": [...], "usedTraffic": ...}
-        برمی‌گردونه. اینجا هر دو حالت رو پشتیبانی می‌کنیم تا اگه پنل
-        یا نسخه‌ی دیگه‌ای فرمت متفاوتی داد، کد کرش نکنه.
+        برمیگردونه. اینجا هر دو حالت رو پشتیبانی میکنیم تا اگه پنل
+        یا نسخهی دیگهای فرمت متفاوتی داد، کد کرش نکنه.
         """
         data = await self._request("GET", f"{self.api_base}/clients/subLinks/{quote(str(sub_id))}")
         if not isinstance(data, dict):
@@ -246,11 +254,11 @@ class SanaeiClient:
 
         obj = data.get("obj")
 
-        # حالت قدیمی/فرضی: obj خودش یک لیست از لینک‌هاست
+        # حالت قدیمی/فرضی: obj خودش یک لیست از لینکهاست
         candidates: list = []
         if isinstance(obj, list):
             candidates = obj
-        # حالت واقعی این پنل: obj یک dict هست و لینک‌ها (اگر باشن) زیر externalLinks میان
+        # حالت واقعی این پنل: obj یک dict هست و لینکها (اگر باشن) زیر externalLinks میان
         elif isinstance(obj, dict):
             external = obj.get("externalLinks")
             if isinstance(external, list):
