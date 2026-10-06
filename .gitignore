@@ -11,4 +11,4 @@ venv/
 *.sqlite3
 qrcodes/
 receipts/
-
+panel.env
