@@ -408,8 +408,8 @@ class Settings:
     # ======================================================
 
     ZARINPAL_MERCHANT_ID: str = _get(
-        "ZARINPAL_MERCHANT_ID",
-        required=True,
+    "ZARINPAL_MERCHANT_ID",
+    "",
     )
 
     ZARINPAL_SANDBOX: bool = _get_bool(
